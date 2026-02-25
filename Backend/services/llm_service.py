@@ -3,10 +3,11 @@ LLM Service for ContentOS
 
 AWS Bedrock-first with automatic fallback chain:
 1. AWS Bedrock (Claude/Titan) - PRIMARY for hackathon
-2. Grok (X.AI) - First fallback
-3. Gemini (Google) - Second fallback (FREE: 60 QPM)
-4. Ollama (Local) - Offline mode
-5. Simple Templates - ULTIMATE fallback (no API needed)
+2. Groq (X.AI) - First fallback (free tier available)
+3. Gemini (Google) - Second fallback (FREE: 60 QPM / 1M TPD)
+4. HuggingFace Inference API - Third fallback (FREE, no CC needed)
+5. Ollama (Local) - Offline mode
+6. Simple Templates - ULTIMATE fallback (no API needed)
 
 Each provider is tried in order until one succeeds.
 """
@@ -29,6 +30,7 @@ class LLMProvider(str, Enum):
     AWS_BEDROCK = "aws_bedrock"
     GROK = "grok"
     GEMINI = "gemini"
+    HUGGINGFACE = "huggingface"
     OLLAMA = "ollama"
     SIMPLE = "simple_template"
 
@@ -196,6 +198,72 @@ class GeminiProvider(BaseLLMProvider):
         except Exception as e:
             logger.error(f"Gemini error: {e}")
             raise ProviderUnavailableError(f"Gemini failed: {e}")
+
+
+class HuggingFaceProvider(BaseLLMProvider):
+    """
+    HuggingFace Inference API provider.
+    COMPLETELY FREE — no credit card required.
+    Uses the free Serverless Inference API endpoints.
+    Docs: https://huggingface.co/inference-api
+    Get a free token at: https://huggingface.co/settings/tokens
+    """
+
+    # Free public models that work well for text generation
+    FREE_MODELS = [
+        "mistralai/Mistral-7B-Instruct-v0.3",
+        "HuggingFaceH4/zephyr-7b-beta",
+        "microsoft/Phi-3-mini-4k-instruct",
+        "tiiuae/falcon-7b-instruct",
+    ]
+
+    def __init__(self):
+        self.api_key = getattr(settings, "huggingface_api_key", None) or ""
+        self.model = self.FREE_MODELS[0]
+        self.base_url = "https://api-inference.huggingface.co/models"
+
+    def is_available(self) -> bool:
+        # Works even without key (rate-limited) — key just raises the limit
+        return True
+
+    async def generate(self, prompt: str, **kwargs) -> str:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # Try each free model until one works
+        for model in self.FREE_MODELS:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/{model}",
+                        headers=headers,
+                        json={
+                            "inputs": prompt,
+                            "parameters": {
+                                "max_new_tokens": min(kwargs.get("max_tokens", 512), 512),
+                                "temperature": kwargs.get("temperature", 0.7),
+                                "return_full_text": False,
+                            },
+                            "options": {"wait_for_model": True},
+                        },
+                    )
+                    if resp.status_code == 503:
+                        # Model loading — short wait handled by wait_for_model
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if isinstance(data, list) and data:
+                        text = data[0].get("generated_text", "").strip()
+                        if text:
+                            logger.info(f"HuggingFace success with model: {model}")
+                            return text
+            except Exception as e:
+                logger.warning(f"HuggingFace model {model} failed: {e}")
+                continue
+
+        raise ProviderUnavailableError("All HuggingFace models failed or rate-limited")
+
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -368,6 +436,7 @@ class LLMService:
             (LLMProvider.AWS_BEDROCK, AWSBedrockProvider()),
             (LLMProvider.GROK, GrokProvider()),
             (LLMProvider.GEMINI, GeminiProvider()),
+            (LLMProvider.HUGGINGFACE, HuggingFaceProvider()),
             (LLMProvider.OLLAMA, OllamaProvider()),
             (LLMProvider.SIMPLE, SimpleTemplateProvider()),  # Ultimate fallback
         ]

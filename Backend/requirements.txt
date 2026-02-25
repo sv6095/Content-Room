@@ -1,4 +1,6 @@
+# ─────────────────────────────────────────────────────────
 # Core Framework
+# ─────────────────────────────────────────────────────────
 fastapi==0.109.2
 uvicorn[standard]==0.27.1
 pydantic==2.6.1
@@ -18,60 +20,97 @@ aiosqlite==0.19.0
 python-jose[cryptography]==3.3.0
 argon2-cffi==23.1.0
 
-# ===========================================
-# AWS SDK (PRIMARY - Hackathon)
-# ===========================================
+# ─────────────────────────────────────────────────────────
+# AWS SDK (PRIMARY — Hackathon)
+# Services used: Bedrock, Comprehend, Rekognition, Translate,
+#               Transcribe, SageMaker, S3, DynamoDB
+# ─────────────────────────────────────────────────────────
 boto3==1.34.49
 botocore==1.34.49
 
-# ===========================================
-# FALLBACK: AI/ML Services (All Free)
-# ===========================================
-
-# LLM Fallbacks
+# ─────────────────────────────────────────────────────────
+# FALLBACK: LLM Services (All Free Tiers)
+# ─────────────────────────────────────────────────────────
 google-generativeai==0.4.0
 openai==1.12.0
 
-# Audio Processing (Free/Local)
+# ─────────────────────────────────────────────────────────
+# Feature #3: Content DNA Fingerprinting
+# Fallback embeddings when SageMaker endpoint unavailable
+# ─────────────────────────────────────────────────────────
+sentence-transformers==2.7.0
+
+# ─────────────────────────────────────────────────────────
+# Feature #2: Risk vs Reach Dial
+# Fallback sentiment scoring
+# ─────────────────────────────────────────────────────────
+textblob==0.18.0
+
+# ─────────────────────────────────────────────────────────
+# Feature #4 & #10: Anti-Cancel Shield + Heatmap
+# NLP fallback for entity detection
+# ─────────────────────────────────────────────────────────
+spacy==3.7.4
+
+# ─────────────────────────────────────────────────────────
+# Feature #7: Trend Lifespan Predictor
+# Fallback time-series forecasting when SageMaker unavailable
+# ─────────────────────────────────────────────────────────
+prophet==1.1.5
+pandas==2.2.0
+
+# ─────────────────────────────────────────────────────────
+# Audio Processing (Free/Local) — AWS Transcribe primary
+# ─────────────────────────────────────────────────────────
 openai-whisper==20231117
 pydub==0.25.1
 SpeechRecognition==3.10.1
 
-# Translation (Free)
+# ─────────────────────────────────────────────────────────
+# Translation (Free) — AWS Translate primary
+# ─────────────────────────────────────────────────────────
 deep-translator==1.11.4
 langdetect==1.0.9
 
-# Vision (Free/Local)
+# ─────────────────────────────────────────────────────────
+# Vision (Free/Local) — AWS Rekognition primary
+# ─────────────────────────────────────────────────────────
 opencv-python-headless==4.9.0.80
 Pillow==10.2.0
 numpy==1.26.4
 
-# ===========================================
-# Storage & Social (NEW)
-# ===========================================
+# ─────────────────────────────────────────────────────────
+# Storage & Social
+# ─────────────────────────────────────────────────────────
 firebase-admin==6.4.0
 APScheduler==3.10.4
 twikit==1.5.0                  # Twitter/X (No API Key)
 linkedin-api==2.1.0            # LinkedIn Service
 
-# ===========================================
+# ─────────────────────────────────────────────────────────
 # Utilities
-# ===========================================
+# ─────────────────────────────────────────────────────────
 cachetools==5.3.2
 python-dateutil==2.8.2
 tenacity==8.2.3
 
-# ===========================================
+# ─────────────────────────────────────────────────────────
 # Testing
-# ===========================================
+# ─────────────────────────────────────────────────────────
 pytest==8.0.1
 pytest-asyncio==0.23.5
 
+# ─────────────────────────────────────────────────────────
 # Content Moderation (Local/Fallback)
+# ─────────────────────────────────────────────────────────
 localmod @ git+https://github.com/KOKOSde/localmod.git
 
-
-# Scraping
+# ─────────────────────────────────────────────────────────
+# Scraping / Data Collection (Reverse Virality Mining)
+# ─────────────────────────────────────────────────────────
 beautifulsoup4==4.12.3
+selenium==4.18.1
+requests==2.31.0
 
+# Misc
 holidays==0.42.0

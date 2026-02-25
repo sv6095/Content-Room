@@ -17,9 +17,10 @@ class Settings(BaseSettings):
     
     Priority Chain:
     1. AWS Services (primary - for hackathon)
-    2. Grok API (first fallback)
-    3. Gemini API (second fallback)
-    4. Local models (offline mode)
+    2. Groq API (first fallback - free tier available)
+    3. Gemini API (second fallback - 60 QPM free)
+    4. HuggingFace Inference API (third fallback - completely free)
+    5. Ollama / local models (offline mode)
     """
     
     # ===========================================
@@ -35,11 +36,29 @@ class Settings(BaseSettings):
     use_aws_transcribe: bool = Field(default=True, alias="USE_AWS_TRANSCRIBE")
     use_aws_translate: bool = Field(default=True, alias="USE_AWS_TRANSLATE")
     use_aws_comprehend: bool = Field(default=True, alias="USE_AWS_COMPREHEND")
+    use_aws_sagemaker: bool = Field(default=True, alias="USE_AWS_SAGEMAKER")
+    use_aws_dynamodb: bool = Field(default=False, alias="USE_AWS_DYNAMODB")
+    use_aws_personalize: bool = Field(default=False, alias="USE_AWS_PERSONALIZE")
+    
+    # Intelligence Feature Toggles (graceful fallback if False)
+    enable_culture_engine: bool = Field(default=True, alias="ENABLE_CULTURE_ENGINE")
+    enable_risk_reach_dial: bool = Field(default=True, alias="ENABLE_RISK_REACH_DIAL")
+    enable_dna_fingerprint: bool = Field(default=True, alias="ENABLE_DNA_FINGERPRINT")
+    enable_anti_cancel: bool = Field(default=True, alias="ENABLE_ANTI_CANCEL")
+    enable_mental_health: bool = Field(default=True, alias="ENABLE_MENTAL_HEALTH")
+    enable_asset_explosion: bool = Field(default=True, alias="ENABLE_ASSET_EXPLOSION")
+    enable_shadowban_predictor: bool = Field(default=True, alias="ENABLE_SHADOWBAN_PREDICTOR")
+    
+    # SageMaker Embeddings endpoint (for DNA fingerprinting)
+    sagemaker_embedding_endpoint: Optional[str] = Field(default=None, alias="SAGEMAKER_EMBEDDING_ENDPOINT")
     
     # LLM Fallback Chain
     # ===========================================
     grok_api_key: Optional[str] = Field(default=None, alias="GROK_API_KEY")
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    # HuggingFace free Inference API — get token at huggingface.co/settings/tokens
+    # Optional: raises anonymous rate limit from ~30 req/hr to 1000+ req/hr
+    huggingface_api_key: Optional[str] = Field(default=None, alias="HUGGINGFACE_API_KEY")
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="llama3", alias="OLLAMA_MODEL")
     

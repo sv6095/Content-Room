@@ -19,6 +19,7 @@ import Settings from "./pages/Settings";
 
 import CompetitorAnalysis from "./pages/CompetitorAnalysis";
 import ContentCalendar from "./pages/ContentCalendar";
+import IntelligenceHub from "./pages/IntelligenceHub";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -50,6 +51,7 @@ const App = () => {
               <Route path="/scheduler" element={<Scheduler />} />
               <Route path="/competitor" element={<CompetitorAnalysis />} />
               <Route path="/calendar" element={<ContentCalendar />} />
+              <Route path="/intelligence" element={<IntelligenceHub />} />
               <Route path="/settings" element={<Settings />} />
               
               {/* Redirects for removed pages */}

@@ -883,6 +883,195 @@ export const calendarAPI = {
   },
 };
 
+// ============================================
+// Intelligence Hub API (12 Novel Features)
+// ============================================
+
+export interface CultureRewriteResponse {
+  original: string;
+  rewritten: string;
+  region: string;
+  persona_applied: string;
+  festival?: string;
+  provider: string;
+  fallback_used: boolean;
+}
+
+export interface RiskReachResponse {
+  original: string;
+  generated: string;
+  risk_level: number;
+  tone_label: string;
+  platform?: string;
+  safety_score: number;
+  sentiment: string;
+  toxicity_score: number;
+  estimated_engagement_probability: number;
+  moderation_risk_percent: number;
+  llm_provider: string;
+  audit_provider: string;
+  fallback_used: boolean;
+}
+
+export interface DNAAnalysisResponse {
+  similarity_score: number;
+  drift_detected: boolean;
+  drift_severity: 'HIGH' | 'MEDIUM' | 'NONE';
+  content_dna_traits: string;
+  realignment_suggestion: string;
+  posts_analyzed: number;
+  embedding_provider: string;
+  llm_provider: string;
+}
+
+export interface HeatmapToken {
+  word: string;
+  risk: 'red' | 'yellow' | 'safe';
+  tooltip?: string;
+}
+
+export interface AntiCancelResponse {
+  risk_score: number;
+  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
+  local_flags: { keyword: string; category: string; risk: string }[];
+  detected_entities: { text: string; type: string; score: number }[];
+  heatmap: HeatmapToken[];
+  safe_alternatives: string[];
+  target_regions: string[];
+  comprehend_provider: string;
+  recommendation: string;
+}
+
+export interface MentalHealthResponse {
+  burnout_score: number;
+  burnout_risk: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_DATA';
+  linguistic_entropy: number;
+  entropy_interpretation: string;
+  sentiment_polarity: number;
+  sentiment_trend: string;
+  repetitive_phrases_detected: string[];
+  recommendations: string;
+  posts_analyzed: number;
+  sentiment_provider: string;
+  advisory_provider: string;
+}
+
+export interface AssetItem {
+  asset_type: string;
+  platform: string;
+  content: string;
+  provider: string;
+  success: boolean;
+}
+
+export interface AssetExplosionResponse {
+  seed_content: string;
+  niche?: string;
+  total_assets: number;
+  successful_assets: number;
+  failed_assets: string[];
+  assets: AssetItem[];
+}
+
+export interface ShadowbanResponse {
+  shadowban_probability: number;
+  risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
+  risk_factors: string[];
+  risky_hashtags: string[];
+  platform: string;
+  recommendation: string;
+  provider: string;
+}
+
+export const intelligenceAPI = {
+  async cultureRewrite(content: string, region: string, festival?: string, niche?: string): Promise<CultureRewriteResponse> {
+    const response = await fetch(`${API_V1}/intel/culture/rewrite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, region, festival, content_niche: niche }),
+    });
+    return handleResponse<CultureRewriteResponse>(response);
+  },
+
+  async getRegions(): Promise<{ id: string; name: string; emoji: string }[]> {
+    const response = await fetch(`${API_V1}/intel/culture/regions`);
+    return handleResponse(response);
+  },
+
+  async getFestivals(): Promise<{ id: string; name: string }[]> {
+    const response = await fetch(`${API_V1}/intel/culture/festivals`);
+    return handleResponse(response);
+  },
+
+  async riskReachGenerate(content: string, riskLevel: number, platform?: string, niche?: string): Promise<RiskReachResponse> {
+    const response = await fetch(`${API_V1}/intel/risk-reach/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, risk_level: riskLevel, platform, niche }),
+    });
+    return handleResponse<RiskReachResponse>(response);
+  },
+
+  async dnaAnalyze(newContent: string, postHistory: string[], userId = 1): Promise<DNAAnalysisResponse> {
+    const response = await fetch(`${API_V1}/intel/dna/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_content: newContent, post_history: postHistory, user_id: userId }),
+    });
+    return handleResponse<DNAAnalysisResponse>(response);
+  },
+
+  async antiCancelAnalyze(text: string, targetRegions?: string[]): Promise<AntiCancelResponse> {
+    const response = await fetch(`${API_V1}/intel/anti-cancel/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, target_regions: targetRegions }),
+    });
+    return handleResponse<AntiCancelResponse>(response);
+  },
+
+  async getHeatmap(text: string): Promise<{ heatmap: HeatmapToken[]; total_words: number }> {
+    const response = await fetch(`${API_V1}/intel/anti-cancel/heatmap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    return handleResponse(response);
+  },
+
+  async mentalHealthAnalyze(posts: string[], userId = 1): Promise<MentalHealthResponse> {
+    const response = await fetch(`${API_V1}/intel/mental-health/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ posts, user_id: userId }),
+    });
+    return handleResponse<MentalHealthResponse>(response);
+  },
+
+  async explodeAssets(seedContent: string, niche?: string, selectedAssets?: string[]): Promise<AssetExplosionResponse> {
+    const response = await fetch(`${API_V1}/intel/explode/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seed_content: seedContent, niche, selected_assets: selectedAssets }),
+    });
+    return handleResponse<AssetExplosionResponse>(response);
+  },
+
+  async getAssetTypes(): Promise<{ asset_types: { key: string; platform: string; persona: string }[] }> {
+    const response = await fetch(`${API_V1}/intel/explode/asset-types`);
+    return handleResponse(response);
+  },
+
+  async predictShadowban(content: string, hashtags?: string[], platform?: string): Promise<ShadowbanResponse> {
+    const response = await fetch(`${API_V1}/intel/shadowban/predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, hashtags, platform }),
+    });
+    return handleResponse<ShadowbanResponse>(response);
+  },
+};
+
 // Default export for convenience
 const api = {
   auth: authAPI,
@@ -895,6 +1084,7 @@ const api = {
   history: historyAPI,
   competitor: competitorAPI,
   calendar: calendarAPI,
+  intelligence: intelligenceAPI,
   checkHealth: checkBackendHealth,
   setAuthToken,
   getAuthToken,

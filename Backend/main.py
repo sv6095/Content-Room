@@ -193,6 +193,10 @@ app.include_router(competitor.router, prefix="/api/v1/competitor", tags=["Compet
 from routers import calendar
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Content Calendar"])
 
+# 13. Intelligence Hub Router (Cultural Emotion, Risk-Reach, DNA, Anti-Cancel, Mental Health, Asset Explosion, Shadowban)
+from routers import intelligence
+app.include_router(intelligence.router, prefix="/api/v1/intel", tags=["Intelligence Hub"])
+
 
 @app.get("/", tags=["System"])
 async def root():
