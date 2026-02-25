@@ -5,13 +5,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
   Wand2,
   Shield,
-  Calendar,
+  CalendarDays,
   Settings,
   LogOut,
   Menu,
   X,
   TrendingUp,
-  CalendarDays,
   Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -26,7 +25,7 @@ const sidebarItems = [
   { icon: TrendingUp, label: 'Competitor Intel', path: '/competitor' },
   { icon: CalendarDays, label: 'Content Calendar', path: '/calendar' },
   { icon: Shield, label: 'Moderation', path: '/moderation' },
-  { icon: Calendar, label: 'Schedule Plan', path: '/scheduler' },
+  { icon: CalendarDays, label: 'Schedule', path: '/scheduler' },
   { icon: Settings, label: 'Settings', path: '/settings' },
 ];
 

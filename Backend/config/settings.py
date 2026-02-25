@@ -14,13 +14,14 @@ from pydantic import Field
 class Settings(BaseSettings):
     """
     Application settings with AWS-first, fallback-ready architecture.
-    
+
     Priority Chain:
-    1. AWS Services (primary - for hackathon)
-    2. Groq API (first fallback - free tier available)
-    3. Gemini API (second fallback - 60 QPM free)
-    4. HuggingFace Inference API (third fallback - completely free)
-    5. Ollama / local models (offline mode)
+    1. AWS Services (primary)
+    2. Groq API        — free tier, no CC  (https://console.groq.com/)
+    3. Gemini API      — free 60 QPM       (https://makersuite.google.com/app/apikey)
+    4. OpenRouter      — free 50 req/day   (https://openrouter.ai/)
+    5. Cerebras        — free tier          (https://cloud.cerebras.ai/)
+    6. Ollama / local models (offline mode)
     """
     
     # ===========================================
@@ -56,9 +57,15 @@ class Settings(BaseSettings):
     # ===========================================
     grok_api_key: Optional[str] = Field(default=None, alias="GROK_API_KEY")
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
-    # HuggingFace free Inference API — get token at huggingface.co/settings/tokens
-    # Optional: raises anonymous rate limit from ~30 req/hr to 1000+ req/hr
-    huggingface_api_key: Optional[str] = Field(default=None, alias="HUGGINGFACE_API_KEY")
+
+    # OpenRouter — free 50 req/day, no CC required
+    # Sign up at https://openrouter.ai/ and generate a free API key (sk-or-v1-...)
+    openrouter_api_key: Optional[str] = Field(default=None, alias="OPENROUTER_API_KEY")
+
+    # Cerebras — free tier, ultra-fast inference
+    # Sign up at https://cloud.cerebras.ai/ and generate a free API key (csk-...)
+    cerebras_api_key: Optional[str] = Field(default=None, alias="CEREBRAS_API_KEY")
+
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="llama3", alias="OLLAMA_MODEL")
     

@@ -1,13 +1,19 @@
 """
-LLM Service for ContentOS
+LLM Service for Content Room
 
 AWS Bedrock-first with automatic fallback chain:
-1. AWS Bedrock (Claude/Titan) - PRIMARY for hackathon
-2. Groq (X.AI) - First fallback (free tier available)
-3. Gemini (Google) - Second fallback (FREE: 60 QPM / 1M TPD)
-4. HuggingFace Inference API - Third fallback (FREE, no CC needed)
-5. Ollama (Local) - Offline mode
-6. Simple Templates - ULTIMATE fallback (no API needed)
+1. AWS Bedrock (Claude/Titan)  — PRIMARY
+2. Groq Cloud                  — FREE tier (no CC), ultra-fast Llama 3.3 70B
+                                  https://console.groq.com/
+3. Gemini (Google AI Studio)   — FREE tier 60 QPM / 1M TPD
+                                  https://makersuite.google.com/app/apikey
+4. OpenRouter                  — FREE tier 50 req/day, no CC required
+                                  Routes to Llama 3.3 70B / Gemini Flash / Mistral
+                                  https://openrouter.ai/  (sign up → free API key)
+5. Cerebras Inference          — FREE tier, ultra-fast Llama 3.1 70B
+                                  https://cloud.cerebras.ai/  (sign up → free API key)
+6. Ollama (Local)              — Offline mode, completely free
+7. Simple Templates            — ULTIMATE fallback (no API needed)
 
 Each provider is tried in order until one succeeds.
 """
@@ -30,7 +36,8 @@ class LLMProvider(str, Enum):
     AWS_BEDROCK = "aws_bedrock"
     GROK = "grok"
     GEMINI = "gemini"
-    HUGGINGFACE = "huggingface"
+    OPENROUTER = "openrouter"
+    CEREBRAS = "cerebras"
     OLLAMA = "ollama"
     SIMPLE = "simple_template"
 
@@ -200,69 +207,131 @@ class GeminiProvider(BaseLLMProvider):
             raise ProviderUnavailableError(f"Gemini failed: {e}")
 
 
-class HuggingFaceProvider(BaseLLMProvider):
+class OpenRouterProvider(BaseLLMProvider):
     """
-    HuggingFace Inference API provider.
-    COMPLETELY FREE — no credit card required.
-    Uses the free Serverless Inference API endpoints.
-    Docs: https://huggingface.co/inference-api
-    Get a free token at: https://huggingface.co/settings/tokens
+    OpenRouter — Free tier, no credit card required.
+    Single API that routes to the best free model available.
+
+    Free tier: 50 requests/day, 200 req/min (with account).
+    Free models include: Llama 3.3 70B, Gemini Flash, Mistral 7B, DeepSeek.
+
+    Sign up (free) at: https://openrouter.ai/
+    API key format: sk-or-v1-...
+    Docs: https://openrouter.ai/docs
     """
 
-    # Free public models that work well for text generation
+    # Ordered list of free model IDs to try (rotates on failure)
     FREE_MODELS = [
-        "mistralai/Mistral-7B-Instruct-v0.3",
-        "HuggingFaceH4/zephyr-7b-beta",
-        "microsoft/Phi-3-mini-4k-instruct",
-        "tiiuae/falcon-7b-instruct",
+        "meta-llama/llama-3.3-70b-instruct:free",   # Llama 3.3 70B — best quality
+        "google/gemini-flash-1.5:free",              # Gemini Flash — very reliable
+        "mistralai/mistral-7b-instruct:free",        # Mistral 7B — lightweight fallback
+        "deepseek/deepseek-r1:free",                 # DeepSeek R1 — reasoning model
     ]
+    BASE_URL = "https://openrouter.ai/api/v1"
 
     def __init__(self):
-        self.api_key = getattr(settings, "huggingface_api_key", None) or ""
-        self.model = self.FREE_MODELS[0]
-        self.base_url = "https://api-inference.huggingface.co/models"
+        self.api_key = getattr(settings, "openrouter_api_key", None) or ""
 
     def is_available(self) -> bool:
-        # Works even without key (rate-limited) — key just raises the limit
-        return True
+        return bool(self.api_key)
 
     async def generate(self, prompt: str, **kwargs) -> str:
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if not self.api_key:
+            raise ProviderUnavailableError("OpenRouter API key not set")
 
-        # Try each free model until one works
         for model in self.FREE_MODELS:
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(
-                        f"{self.base_url}/{model}",
-                        headers=headers,
+                        f"{self.BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                            # Recommended by OpenRouter for free-tier routing
+                            "HTTP-Referer": "https://github.com/Neil2813/Content-Room",
+                            "X-Title": "Content Room",
+                        },
                         json={
-                            "inputs": prompt,
-                            "parameters": {
-                                "max_new_tokens": min(kwargs.get("max_tokens", 512), 512),
-                                "temperature": kwargs.get("temperature", 0.7),
-                                "return_full_text": False,
-                            },
-                            "options": {"wait_for_model": True},
+                            "model": model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": kwargs.get("max_tokens", 1024),
+                            "temperature": kwargs.get("temperature", 0.7),
                         },
                     )
-                    if resp.status_code == 503:
-                        # Model loading — short wait handled by wait_for_model
+                    if resp.status_code == 429:
+                        logger.warning(f"OpenRouter rate limit hit for model {model}, trying next")
                         continue
                     resp.raise_for_status()
                     data = resp.json()
-                    if isinstance(data, list) and data:
-                        text = data[0].get("generated_text", "").strip()
-                        if text:
-                            logger.info(f"HuggingFace success with model: {model}")
-                            return text
+                    text = data["choices"][0]["message"]["content"].strip()
+                    if text:
+                        logger.info(f"OpenRouter success with model: {model}")
+                        return text
             except Exception as e:
-                logger.warning(f"HuggingFace model {model} failed: {e}")
+                logger.warning(f"OpenRouter model {model} failed: {e}")
                 continue
 
-        raise ProviderUnavailableError("All HuggingFace models failed or rate-limited")
+        raise ProviderUnavailableError("All OpenRouter free models failed or daily limit reached")
+
+
+class CerebrasProvider(BaseLLMProvider):
+    """
+    Cerebras Inference — Free tier, no credit card required.
+    Extremely fast inference (800+ tokens/sec) powered by Cerebras CS-3 chips.
+
+    Free tier: generous daily token limit, Llama 3.1 8B and 70B available.
+    Sign up (free) at: https://cloud.cerebras.ai/
+    API key format: csk-...
+    Docs: https://inference-docs.cerebras.ai/
+    """
+
+    BASE_URL = "https://api.cerebras.ai/v1"
+    # Models available on free tier
+    FREE_MODELS = [
+        "llama-3.3-70b",   # Best quality
+        "llama3.1-8b",     # Faster, lighter fallback
+    ]
+
+    def __init__(self):
+        self.api_key = getattr(settings, "cerebras_api_key", None) or ""
+
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    async def generate(self, prompt: str, **kwargs) -> str:
+        if not self.api_key:
+            raise ProviderUnavailableError("Cerebras API key not set")
+
+        for model in self.FREE_MODELS:
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(
+                        f"{self.BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": kwargs.get("max_tokens", 1024),
+                            "temperature": kwargs.get("temperature", 0.7),
+                        },
+                    )
+                    if resp.status_code == 429:
+                        logger.warning(f"Cerebras rate limit for model {model}, trying next")
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    text = data["choices"][0]["message"]["content"].strip()
+                    if text:
+                        logger.info(f"Cerebras success with model: {model}")
+                        return text
+            except Exception as e:
+                logger.warning(f"Cerebras model {model} failed: {e}")
+                continue
+
+        raise ProviderUnavailableError("Cerebras models failed or rate-limited")
 
 
 
@@ -427,20 +496,28 @@ EXPLANATION: Content appears to be safe for publication."""
 class LLMService:
     """
     LLM Service with automatic fallback chain.
-    
-    Priority: AWS Bedrock → Grok → Gemini → Ollama → Simple Templates
+
+    Priority:
+      1. AWS Bedrock   (primary)
+      2. Groq Cloud    (free, no CC — https://console.groq.com/)
+      3. Gemini        (free 60 QPM — https://makersuite.google.com/app/apikey)
+      4. OpenRouter    (free 50 req/day — https://openrouter.ai/)
+      5. Cerebras      (free tier — https://cloud.cerebras.ai/)
+      6. Ollama        (local / offline)
+      7. Simple Templates (always available, no API)
     """
-    
+
     def __init__(self):
         self.providers: List[tuple[str, BaseLLMProvider]] = [
             (LLMProvider.AWS_BEDROCK, AWSBedrockProvider()),
-            (LLMProvider.GROK, GrokProvider()),
-            (LLMProvider.GEMINI, GeminiProvider()),
-            (LLMProvider.HUGGINGFACE, HuggingFaceProvider()),
-            (LLMProvider.OLLAMA, OllamaProvider()),
-            (LLMProvider.SIMPLE, SimpleTemplateProvider()),  # Ultimate fallback
+            (LLMProvider.GROK,        GrokProvider()),
+            (LLMProvider.GEMINI,      GeminiProvider()),
+            (LLMProvider.OPENROUTER,  OpenRouterProvider()),
+            (LLMProvider.CEREBRAS,    CerebrasProvider()),
+            (LLMProvider.OLLAMA,      OllamaProvider()),
+            (LLMProvider.SIMPLE,      SimpleTemplateProvider()),  # Ultimate fallback
         ]
-        
+
         # Log available providers
         available = [name for name, p in self.providers if p.is_available()]
         logger.info(f"LLM providers available: {available}")
