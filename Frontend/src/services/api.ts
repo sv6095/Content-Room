@@ -893,7 +893,16 @@ export interface CultureRewriteResponse {
   region: string;
   persona_applied: string;
   festival?: string;
+  // RL + LLM hybrid scores
+  alignment_score?: number;
+  llm_score?: number;
+  rule_alignment_score?: number;
+  weights?: { llm: number; rule_engine: number };
+  matched_hooks?: string[];
+  violations?: string[];
+  festival_keywords?: string[];
   provider: string;
+  rule_provider?: string;
   fallback_used: boolean;
 }
 
@@ -933,14 +942,18 @@ export interface HeatmapToken {
 export interface AntiCancelResponse {
   risk_score: number;
   risk_level: 'HIGH' | 'MEDIUM' | 'LOW';
-  local_flags: { keyword: string; category: string; risk: string }[];
+  local_flags: { keyword: string; category: string; risk: string; severity?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'; tier?: string }[];
+  universal_flags?: { keyword: string; category: string; severity: string }[];
+  india_flags?: { keyword: string; category: string; severity: string }[];
   detected_entities: { text: string; type: string; score: number }[];
   heatmap: HeatmapToken[];
   safe_alternatives: string[];
   target_regions: string[];
   comprehend_provider: string;
   recommendation: string;
+  has_critical_threat?: boolean;
 }
+
 
 export interface MentalHealthResponse {
   burnout_score: number;
@@ -961,6 +974,12 @@ export interface AssetItem {
   platform: string;
   content: string;
   provider: string;
+  rule_provider?: string;
+  quality_score?: number;
+  llm_score?: number;
+  compliance_score?: number;
+  compliance_issues?: string[];
+  weights?: { llm: number; rule_engine: number };
   success: boolean;
 }
 
@@ -980,7 +999,12 @@ export interface ShadowbanResponse {
   risky_hashtags: string[];
   platform: string;
   recommendation: string;
+  analysis?: string;
+  rule_safety_score?: number;  // 100=completely clean, lower=rule violations found
+  rule_score?: number;         // inverted: 0=clean risk contribution, higher=more rule risk
+  llm_score?: number;
   provider: string;
+  fallback_used?: boolean;
 }
 
 export const intelligenceAPI = {
@@ -1072,6 +1096,161 @@ export const intelligenceAPI = {
   },
 };
 
+// ============================================
+// NOVEL HUB APIs
+// ============================================
+
+export interface SignalIntelAgent {
+  name: string;
+  output: string;
+  provider: string;
+}
+
+export interface SignalIntelResponse {
+  competitor_handles: string[];
+  niche: string;
+  region: string;
+  agents: {
+    scraper: SignalIntelAgent;
+    analyst: SignalIntelAgent;
+    strategist: SignalIntelAgent;
+  };
+  provider_chain: string[];
+  timestamp: string;
+}
+
+export interface TrendInjectionResponse {
+  original_content: string;
+  region: string;
+  niche: string;
+  region_context: { languages: string[]; festivals: string[]; local_topics: string[] };
+  trending_topics: string;
+  enhanced_content: string;
+  trend_provider: string;
+  injection_provider: string;
+  timestamp: string;
+}
+
+export interface MultimodalProduction {
+  format_key: string;
+  format_name: string;
+  content: string;
+  provider: string;
+  success: boolean;
+}
+
+export interface MultimodalResponse {
+  seed_content: string;
+  niche: string;
+  target_language: string;
+  total_formats: number;
+  successful: number;
+  productions: MultimodalProduction[];
+  timestamp: string;
+}
+
+export interface PlatformPreview {
+  platform: string;
+  optimized_content: string;
+  provider: string;
+  specs: Record<string, unknown>;
+  recommended_time: string | null;
+  status: string;
+  success: boolean;
+}
+
+export interface AutoPublishResponse {
+  original_content: string;
+  platforms: string[];
+  niche: string;
+  schedule_time: string | null;
+  previews: PlatformPreview[];
+  total_platforms: number;
+  successful: number;
+  timestamp: string;
+}
+
+export interface BurnoutAnalysis {
+  burnout_score: number;
+  signals: string[];
+  entropy: number;
+  sentiment_drift: number;
+  repetition_index: number;
+  length_decline?: number;
+  burnout_keywords_found?: number;
+  total_posts_analyzed?: number;
+}
+
+export interface BurnoutResponse {
+  burnout_analysis: BurnoutAnalysis;
+  workload_mode: string;
+  mode_description: string;
+  original_target: number;
+  adjusted_target: number;
+  adapted_schedule: string;
+  schedule_provider: string;
+  niche: string;
+  timestamp: string;
+}
+
+export interface ProductionFormat {
+  key: string;
+  name: string;
+  description: string;
+}
+
+export const novelAPI = {
+  async signalIntelligence(handles: string[], niche: string, region?: string, platforms?: string[]): Promise<SignalIntelResponse> {
+    const response = await fetch(`${API_V1}/novel/signal-intelligence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ competitor_handles: handles, niche, region: region || 'pan-india', platforms }),
+    });
+    return handleResponse<SignalIntelResponse>(response);
+  },
+
+  async trendInjection(content: string, region: string, niche: string): Promise<TrendInjectionResponse> {
+    const response = await fetch(`${API_V1}/novel/trend-injection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, region, niche, inject_trends: true }),
+    });
+    return handleResponse<TrendInjectionResponse>(response);
+  },
+
+  async multimodalProduction(seedContent: string, formats: string[], niche: string, targetLanguage?: string): Promise<MultimodalResponse> {
+    const response = await fetch(`${API_V1}/novel/multimodal-production`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seed_content: seedContent, formats, niche, target_language: targetLanguage || 'Hindi' }),
+    });
+    return handleResponse<MultimodalResponse>(response);
+  },
+
+  async getProductionFormats(): Promise<{ formats: ProductionFormat[] }> {
+    const response = await fetch(`${API_V1}/novel/production-formats`);
+    return handleResponse(response);
+  },
+
+  async autoPublish(content: string, platforms: string[], niche: string, scheduleTime?: string): Promise<AutoPublishResponse> {
+    const response = await fetch(`${API_V1}/novel/auto-publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, platforms, niche, schedule_time: scheduleTime }),
+    });
+    return handleResponse<AutoPublishResponse>(response);
+  },
+
+  async burnoutPredict(posts: string[], niche: string, weeklyTarget?: number): Promise<BurnoutResponse> {
+    const response = await fetch(`${API_V1}/novel/burnout-predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ posts, niche, weekly_target: weeklyTarget || 7 }),
+    });
+    return handleResponse<BurnoutResponse>(response);
+  },
+};
+
 // Default export for convenience
 const api = {
   auth: authAPI,
@@ -1085,6 +1264,7 @@ const api = {
   competitor: competitorAPI,
   calendar: calendarAPI,
   intelligence: intelligenceAPI,
+  novel: novelAPI,
   checkHealth: checkBackendHealth,
   setAuthToken,
   getAuthToken,

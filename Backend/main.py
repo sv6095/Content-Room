@@ -197,6 +197,11 @@ app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Content Ca
 from routers import intelligence
 app.include_router(intelligence.router, prefix="/api/v1/intel", tags=["Intelligence Hub"])
 
+# 14. Novel Hub Router (Signal Intelligence, Trend RAG, Multimodal, Auto-Publish, Burnout)
+from routers import novel
+app.include_router(novel.router, prefix="/api/v1/novel", tags=["Novel Hub"])
+
+
 
 @app.get("/", tags=["System"])
 async def root():

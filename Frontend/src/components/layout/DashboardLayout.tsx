@@ -12,6 +12,7 @@ import {
   X,
   TrendingUp,
   Zap,
+  Rocket,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -22,6 +23,7 @@ interface DashboardLayoutProps {
 const sidebarItems = [
   { icon: Wand2, label: 'Creator Studio', path: '/studio' },
   { icon: Zap, label: '⚡ Intelligence Hub', path: '/intelligence' },
+  { icon: Rocket, label: '🚀 Novel AI Lab', path: '/novel' },
   { icon: TrendingUp, label: 'Competitor Intel', path: '/competitor' },
   { icon: CalendarDays, label: 'Content Calendar', path: '/calendar' },
   { icon: Shield, label: 'Moderation', path: '/moderation' },

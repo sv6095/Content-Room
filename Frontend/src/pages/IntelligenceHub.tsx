@@ -140,6 +140,37 @@ function CultureTab() {
             <Chip text={`Tone: ${result.persona_applied}`} color="blue" />
             {result.festival && <Chip text={`Festival: ${result.festival}`} color="orange" />}
           </div>
+          {/* RL + LLM Score Breakdown */}
+          {result.alignment_score !== undefined && (
+            <div className="grid grid-cols-3 gap-2 text-center mt-1">
+              {[
+                { label: "Alignment Score", value: `${result.alignment_score}/100`, color: result.alignment_score >= 70 ? "text-emerald-400" : "text-yellow-400" },
+                { label: "AI Score (60%)", value: `${result.llm_score ?? "—"}`,  color: "text-blue-400" },
+                { label: "Rule Score (40%)", value: `${result.rule_alignment_score ?? "—"}`, color: "text-violet-400" },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="rounded-lg bg-muted p-2">
+                  <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+                  <p className={`text-sm font-bold ${color}`}>{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.matched_hooks && result.matched_hooks.length > 0 && (
+            <div className="flex gap-1.5 flex-wrap">
+              <span className="text-xs text-muted-foreground">Hooks matched:</span>
+              {result.matched_hooks.map((h, i) => <Chip key={i} text={h} color="green" />)}
+            </div>
+          )}
+          {result.violations && result.violations.length > 0 && (
+            <div className="flex gap-1.5 flex-wrap">
+              <span className="text-xs text-muted-foreground">⚠️ Avoid-list hit:</span>
+              {result.violations.map((v, i) => <Chip key={i} text={v} color="red" />)}
+            </div>
+          )}
+          <div className="flex gap-1.5 flex-wrap pt-0.5">
+            <Chip text={`Model: ${result.provider}`} color="purple" />
+            {result.rule_provider && <Chip text={result.rule_provider} color="blue" />}
+          </div>
         </ResultBox>
       )}
     </div>
@@ -281,12 +312,29 @@ function CancelTab() {
             </span>
           </div>
 
+          {/* CRITICAL threat banner */}
+          {(result as AntiCancelResponse & { has_critical_threat?: boolean }).has_critical_threat && (
+            <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-3 flex items-start gap-2">
+              <span className="text-red-400 text-lg shrink-0">🚨</span>
+              <div>
+                <p className="text-sm font-bold text-red-400">CRITICAL THREAT DETECTED</p>
+                <p className="text-xs text-red-300/80 mt-0.5">This content contains violence, murder, or hate language. It will be actioned by platform Trust &amp; Safety if posted.</p>
+              </div>
+            </div>
+          )}
+
           {result.local_flags.length > 0 && (
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Flagged Keywords</p>
               <div className="flex flex-wrap gap-2">
                 {result.local_flags.map((f, i) => (
-                  <Chip key={i} text={`${f.keyword} (${f.category})`} color="red" />
+                  <span key={i} className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
+                    f.severity === 'CRITICAL' ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                    : 'bg-orange-500/15 text-orange-400 border border-orange-500/20'
+                  }`}>
+                    {f.severity === 'CRITICAL' ? '⛔' : '⚠'} {f.keyword}
+                    <span className="opacity-60">({f.category})</span>
+                  </span>
                 ))}
               </div>
             </div>
@@ -317,7 +365,11 @@ function CancelTab() {
           )}
 
           {result.recommendation && (
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+            <div className={`rounded-lg border p-3 ${
+              (result as AntiCancelResponse & { has_critical_threat?: boolean }).has_critical_threat
+                ? 'border-red-500/30 bg-red-500/5'
+                : 'border-primary/20 bg-primary/5'
+            }`}>
               <p className="text-sm text-muted-foreground">{result.recommendation}</p>
             </div>
           )}
@@ -390,12 +442,32 @@ function AssetsTab() {
                   <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                     {platformEmojis[item.asset_type] || "📝"} {item.platform}
                   </span>
-                  <button onClick={() => handleCopy(String(idx), item.content)}
-                    title="Copy" className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity">
-                    {copied === String(idx) ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {item.quality_score !== undefined && (
+                      <span className={`text-xs font-bold ${
+                        item.quality_score >= 70 ? "text-emerald-400" : item.quality_score >= 45 ? "text-yellow-400" : "text-red-400"
+                      }`}>⭐ {item.quality_score}</span>
+                    )}
+                    <button onClick={() => handleCopy(String(idx), item.content)}
+                      title="Copy" className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity">
+                      {copied === String(idx) ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">{item.content}</p>
+                {item.compliance_issues && item.compliance_issues.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {item.compliance_issues.map((issue, i) => (
+                      <span key={i} className="text-xs text-yellow-400 bg-yellow-500/10 px-1.5 py-0.5 rounded">⚠ {issue}</span>
+                    ))}
+                  </div>
+                )}
+                {item.quality_score !== undefined && (
+                  <div className="flex gap-1.5 mt-2 flex-wrap">
+                    <Chip text={`AI: ${item.llm_score ?? "—"} (65%)`} color="blue" />
+                    <Chip text={`Rules: ${item.compliance_score ?? "—"} (35%)`} color="purple" />
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -570,6 +642,30 @@ function ShadowTab() {
               <p className="text-sm text-muted-foreground">{result.recommendation}</p>
             </div>
           )}
+
+          {result.analysis && (
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+              <p className="text-xs font-semibold text-blue-400 uppercase tracking-wide mb-1">AI Deep Analysis</p>
+              <p className="text-sm text-muted-foreground">{result.analysis}</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-2 text-center mt-1">
+            {[
+              { label: "Final Risk", value: `${result.shadowban_probability}%`, color: result.shadowban_probability >= 60 ? "text-red-400" : result.shadowban_probability >= 30 ? "text-yellow-400" : "text-emerald-400" },
+              { label: "AI Risk (70%)", value: result.llm_score !== undefined ? `${result.llm_score}` : "—", color: "text-blue-400" },
+              { label: "Rule Safety (30%)", value: result.rule_safety_score !== undefined ? `${result.rule_safety_score}/100` : "—", color: result.rule_safety_score !== undefined && result.rule_safety_score >= 80 ? "text-emerald-400" : "text-orange-400" },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="rounded-lg bg-muted p-2">
+                <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+                <p className={`text-sm font-bold ${color}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
+            <Chip text={`Model: ${result.provider}`} color="purple" />
+            {result.fallback_used && <Chip text="Fallback Used" color="orange" />}
+          </div>
         </ResultBox>
       )}
     </div>

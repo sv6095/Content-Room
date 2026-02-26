@@ -218,58 +218,149 @@ RISKY_SUFFIXES = [
 
 @router.post("/shadowban/predict")
 async def predict_shadowban(request: ShadowbanRequest):
-    """Predict shadowban probability using platform policy pattern matching."""
+    """
+    Predict shadowban probability using:
+    1. Rule-engine pre-filter (fast keyword/pattern matching)
+    2. LLM deep analysis (Groq / Gemini / Bedrock via fallback chain)
+    """
+    import re
     try:
         content_lower = request.content.lower()
-        risk_factors = []
-        score = 0
+        rule_risk_factors: list = []
+        rule_score = 0
 
-        # Engagement bait detection
+        # ── Rule Engine Pre-Filter ────────────────────────
+        # rule_score: starts at 100 (clean), deduct for each violation
+        # This matches the same direction as compliance_score and alignment_score
+        rule_score = 100
+
         for pattern in ENGAGEMENT_BAIT_PATTERNS:
             if pattern in content_lower:
-                risk_factors.append(f"Engagement bait: '{pattern}'")
-                score += 15
+                rule_risk_factors.append(f"Engagement bait: '{pattern}'")
+                rule_score -= 18
 
-        # Circumvented keyword detection
         for suffix in RISKY_SUFFIXES:
             if suffix in content_lower:
-                risk_factors.append(f"Spam character substitution: '{suffix}'")
-                score += 25
+                rule_risk_factors.append(f"Spam character substitution: '{suffix}'")
+                rule_score -= 28
 
-        # Hashtag audit
-        risky_hashtags = []
+        risky_hashtags: list = []
         if request.hashtags:
             for ht in request.hashtags:
                 if len(ht) < 3:
                     risky_hashtags.append(f"Too short: {ht}")
-                    score += 5
+                    rule_score -= 8
                 if any(bait in ht.lower() for bait in ["follow", "like4like", "f4f", "l4l"]):
                     risky_hashtags.append(f"Banned pattern: {ht}")
-                    score += 10
+                    rule_score -= 12
 
-        # Excessive CTA repetition
         cta_count = sum(content_lower.count(cta) for cta in ["follow", "like", "share", "comment", "subscribe"])
         if cta_count > 5:
-            risk_factors.append(f"Excessive CTAs ({cta_count} found)")
-            score += min(30, cta_count * 5)
+            rule_risk_factors.append(f"Excessive CTAs ({cta_count} found)")
+            rule_score -= min(35, cta_count * 5)
 
-        score = min(95, score)
+        # floor at 5 (never absolute zero — avoids false certainty)
+        rule_score = max(5, min(100, rule_score))
+
+        # ── LLM Deep Analysis ─────────────────────────────
+        platform = request.platform or "instagram"
+        hashtag_str = ", ".join(request.hashtags) if request.hashtags else "none"
+
+        llm_prompt = f"""You are an expert social media algorithm analyst specializing in {platform} content policy and shadowban detection.
+
+Analyze this content for shadowban risk on {platform}:
+
+CONTENT:
+{request.content}
+
+HASHTAGS: {hashtag_str}
+
+RULE-ENGINE PRE-SCAN FLAGS (already detected):
+{rule_risk_factors if rule_risk_factors else ["None"]}
+
+Evaluate the content deeply on these criteria:
+1. Policy violations (spam signals, manipulative language, prohibited topics for {platform})
+2. Algorithmic suppression triggers specific to {platform}
+3. Bot-like patterns vs genuine creator voice
+4. Hashtag strategy quality and banned hashtag risk
+5. Over-promotion signals
+
+Respond in this EXACT format only:
+SHADOWBAN_SCORE: [0-100 integer]
+ADDITIONAL_RISK_FACTORS: [comma-separated new risks you found, or "none"]
+RISKY_HASHTAGS_FOUND: [comma-separated hashtags that are risky, or "none"]
+RECOMMENDATION: [1-2 sentence actionable fix]
+ANALYSIS: [2-3 sentence expert explanation]"""
+
+        from services.llm_service import get_llm_service
+        llm = get_llm_service()
+        llm_result = await llm.generate(llm_prompt, task="shadowban_predict", max_tokens=400)
+        llm_text = llm_result["text"]
+        provider = llm_result["provider"]
+
+        # ── Parse LLM Response ────────────────────────────
+        def extract(pattern: str, text: str, default: str = "") -> str:
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            return m.group(1).strip() if m else default
+
+        # LLM score from response (this IS a risk score: high = more risky)
+        llm_score_str = extract(r"SHADOWBAN_SCORE:\s*(\d+)", llm_text, "50")
+        try:
+            llm_score = min(95, max(0, int(llm_score_str)))
+        except ValueError:
+            llm_score = 50
+
+        # Correct blend:
+        #   rule_score  = safety score (100 = clean, 5 = very risky)
+        #   llm_score   = risk score   (0 = clean, 95 = very risky)
+        # Convert rule_score to a risk equivalent: rule_risk = 100 - rule_score
+        rule_risk_equivalent = 100 - rule_score  # 0 = clean, 95 = very risky
+
+        # Weights: LLM 70% (contextual depth), Rule Engine 30% (pattern certainty)
+        final_score = min(95, int(llm_score * 0.70 + rule_risk_equivalent * 0.30))
+
+        additional_risks_raw = extract(r"ADDITIONAL_RISK_FACTORS:\s*(.+?)(?:\n|$)", llm_text, "none")
+        llm_risk_factors = [
+            r.strip() for r in additional_risks_raw.split(",")
+            if r.strip().lower() not in ("", "none")
+        ]
+
+        risky_ht_raw = extract(r"RISKY_HASHTAGS_FOUND:\s*(.+?)(?:\n|$)", llm_text, "none")
+        llm_risky_hashtags = [
+            h.strip() for h in risky_ht_raw.split(",")
+            if h.strip().lower() not in ("", "none")
+        ]
+
+        recommendation = extract(r"RECOMMENDATION:\s*(.+?)(?:\n|ANALYSIS|$)", llm_text)
+        if not recommendation:
+            recommendation = (
+                "🚨 High shadowban risk. Remove flagged patterns before posting." if final_score >= 60
+                else "⚠️ Moderate risk. Consider revising flagged sections." if final_score >= 30
+                else "✅ Low shadowban risk. Safe to post."
+            )
+
+        analysis = extract(r"ANALYSIS:\s*(.+?)$", llm_text)
+
+        # Merge & deduplicate
+        all_risk_factors = list(dict.fromkeys(rule_risk_factors + llm_risk_factors))
+        all_risky_hashtags = list(dict.fromkeys(risky_hashtags + llm_risky_hashtags))
 
         return {
-            "shadowban_probability": score,
-            "risk_level": "HIGH" if score >= 60 else "MEDIUM" if score >= 30 else "LOW",
-            "risk_factors": risk_factors,
-            "risky_hashtags": risky_hashtags,
-            "platform": request.platform,
-            "recommendation": (
-                "🚨 High shadowban risk. Remove flagged patterns before posting."
-                if score >= 60 else
-                "⚠️ Moderate risk. Consider revising flagged sections."
-                if score >= 30 else
-                "✅ Low shadowban risk. Safe to post."
-            ),
-            "provider": "rule_engine_v1",
+            "shadowban_probability": final_score,
+            "risk_level": "HIGH" if final_score >= 60 else "MEDIUM" if final_score >= 30 else "LOW",
+            "risk_factors": all_risk_factors,
+            "risky_hashtags": all_risky_hashtags,
+            "platform": platform,
+            "recommendation": recommendation,
+            "analysis": analysis,
+            # Score transparency
+            "rule_safety_score": rule_score,          # 100=clean, low=violations found
+            "rule_score": rule_risk_equivalent,       # inverted for display (matches risk direction)
+            "llm_score": llm_score,
+            "provider": provider,
+            "fallback_used": llm_result.get("fallback_used", False),
         }
+
     except Exception as e:
         logger.error(f"Shadowban prediction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
