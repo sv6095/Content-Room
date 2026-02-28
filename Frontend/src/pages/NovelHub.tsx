@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
-  Loader2, Radar, Globe2, Clapperboard, Send, Brain, Copy, Check, Plus, X,
+  Radar, Globe2, Clapperboard, Send, Brain, Plus, X,
 } from "lucide-react";
 import {
   novelAPI,
@@ -19,6 +19,7 @@ import {
   type BurnoutResponse,
 } from "@/services/api";
 import ReactMarkdown from "react-markdown";
+import { Spinner, ResultBox, Chip, CopyBtn } from "@/components/shared/IntelPrimitives";
 
 // ─── Tab definitions ──────────────────────────────────────
 const TABS = [
@@ -31,48 +32,7 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-// ─── Shared helpers ───────────────────────────────────────
-function Spinner() {
-  return <Loader2 className="h-4 w-4 animate-spin" />;
-}
-
-function ResultBox({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 rounded-xl border border-border bg-muted/30 p-4 space-y-3 animate-fade-in">
-      {children}
-    </div>
-  );
-}
-
-function Chip({ text, color }: { text: string; color: "purple" | "blue" | "orange" | "green" | "red" | "yellow" }) {
-  const map = {
-    purple: "bg-violet-500/10 text-violet-400 border-violet-500/20",
-    blue:   "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    orange: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-    green:  "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    red:    "bg-red-500/10 text-red-400 border-red-500/20",
-    yellow: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
-  };
-  return (
-    <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full border font-medium ${map[color]}`}>
-      {text}
-    </span>
-  );
-}
-
-function CopyBtn({ text }: { text: string }) {
-  const [ok, setOk] = useState(false);
-  return (
-    <button
-      title="Copy"
-      onClick={() => { navigator.clipboard.writeText(text); setOk(true); setTimeout(() => setOk(false), 2000); }}
-      className="text-muted-foreground hover:text-foreground transition-colors"
-    >
-      {ok ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
-  );
-}
-
+/** Agent output card — unique to the Signal Intelligence multi-agent pipeline. */
 function AgentCard({ emoji, name, provider, output }: { emoji: string; name: string; provider: string; output: string }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-2">
@@ -146,7 +106,7 @@ function SignalTab() {
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="si-region">Region</Label>
-          <select id="si-region" value={region} onChange={e => setRegion(e.target.value)} disabled={loading}
+          <select id="si-region" title="Region" value={region} onChange={e => setRegion(e.target.value)} disabled={loading}
             className="w-full h-9 rounded-lg border border-border bg-background px-3 text-sm">
             {["pan-india","mumbai","delhi","chennai","kolkata","bangalore","hyderabad","punjab"].map(r => (
               <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
@@ -206,7 +166,7 @@ function TrendsTab() {
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label htmlFor="tr-region">Target Region</Label>
-          <select id="tr-region" value={region} onChange={e => setRegion(e.target.value)} disabled={loading}
+          <select id="tr-region" title="Target Region" value={region} onChange={e => setRegion(e.target.value)} disabled={loading}
             className="w-full h-9 rounded-lg border border-border bg-background px-3 text-sm">
             {["mumbai","delhi","chennai","kolkata","bangalore","hyderabad","punjab","pan-india"].map(r => (
               <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
@@ -310,7 +270,7 @@ function MultimodalTab() {
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="mm-lang">Primary Language</Label>
-          <select id="mm-lang" value={language} onChange={e => setLanguage(e.target.value)} disabled={loading}
+          <select id="mm-lang" title="Primary Language" value={language} onChange={e => setLanguage(e.target.value)} disabled={loading}
             className="w-full h-9 rounded-lg border border-border bg-background px-3 text-sm">
             {["Hindi","Tamil","Telugu","Bengali","Marathi","Kannada","English"].map(l => (
               <option key={l} value={l}>{l}</option>

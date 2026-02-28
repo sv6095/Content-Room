@@ -12,12 +12,17 @@ Features:
 5. Predictive Creator Burnout & Self-Evolving Workloads
 """
 import logging
-import re
-import math
 import random
-from typing import Optional, List, Dict, Any
-from collections import Counter
+from typing import Optional, List
 from datetime import datetime
+
+from utils.linguistics import (
+    compute_normalised_entropy,
+    compute_repetition_index,
+    sentiment_word_ratio,
+    count_burnout_keywords,
+    post_length_decline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +480,8 @@ Make it publication-ready — no placeholders."""
 def _compute_burnout_signals(posts: List[str]) -> dict:
     """
     Rule-based burnout signal detection (RL layer).
-    Analyzes linguistic patterns for creator fatigue.
+    Delegates to shared `utils.linguistics` primitives and composes a
+    composite score from entropy, repetition, keyword, length, and sentiment signals.
     """
     if not posts or len(posts) < 2:
         return {
@@ -486,69 +492,33 @@ def _compute_burnout_signals(posts: List[str]) -> dict:
             "repetition_index": 0,
         }
 
-    all_text = " ".join(posts)
-    words = all_text.lower().split()
+    # ── Individual signal values ────────────────────────────
+    entropy       = compute_normalised_entropy(posts)
+    rep_index     = compute_repetition_index(posts)
+    kw_hits       = count_burnout_keywords(posts)
+    len_decline   = post_length_decline(posts)
+    sent_ratio    = sentiment_word_ratio(posts)
 
-    # 1. Linguistic Entropy (low = repetitive = burnout)
-    word_counts = Counter(words)
-    total = len(words)
-    entropy = 0
-    for count in word_counts.values():
-        p = count / total
-        if p > 0:
-            entropy -= p * math.log2(p)
-    max_entropy = math.log2(len(word_counts)) if word_counts else 1
-    normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
-
-    # 2. Repetition Index
-    unique_ratio = len(word_counts) / total if total > 0 else 0
-    repetition_index = 1 - unique_ratio  # Higher = more repetitive
-
-    # 3. Burnout keywords
-    burnout_keywords = [
-        "tired", "exhausted", "burnt out", "burnout", "need a break",
-        "overwhelmed", "struggling", "unmotivated", "drained", "can't do this",
-        "hate this", "so done", "giving up", "no energy", "frustrated",
-        "bored", "same thing", "pointless", "who cares", "whatever",
-    ]
-    burnout_hits = sum(1 for kw in burnout_keywords if kw in all_text.lower())
-
-    # 4. Post length variance (declining length = burnout)
-    lengths = [len(p.split()) for p in posts]
-    if len(lengths) >= 2:
-        recent_avg = sum(lengths[-len(lengths)//2:]) / max(1, len(lengths)//2)
-        earlier_avg = sum(lengths[:len(lengths)//2]) / max(1, len(lengths)//2)
-        length_decline = max(0, (earlier_avg - recent_avg) / max(1, earlier_avg))
-    else:
-        length_decline = 0
-
-    # 5. Sentiment flatness (using simple positive/negative word ratio)
-    positive = ["love", "amazing", "great", "happy", "excited", "awesome", "beautiful", "incredible"]
-    negative = ["bad", "worst", "hate", "terrible", "awful", "boring", "annoyed", "angry"]
-    pos_count = sum(1 for w in words if w in positive)
-    neg_count = sum(1 for w in words if w in negative)
-    sentiment_ratio = pos_count / max(1, pos_count + neg_count)
-
-    # Composite burnout score
-    signals = []
+    # ── Composite scoring ──────────────────────────────────
+    signals: list[str] = []
     score = 0
 
-    if normalized_entropy < 0.6:
+    if entropy < 0.6:
         score += 25
-        signals.append(f"Low linguistic diversity (entropy: {normalized_entropy:.2f})")
-    if repetition_index > 0.7:
+        signals.append(f"Low linguistic diversity (entropy: {entropy:.2f})")
+    if rep_index > 0.7:
         score += 20
-        signals.append(f"High word repetition ({repetition_index:.1%})")
-    if burnout_hits >= 2:
+        signals.append(f"High word repetition ({rep_index:.1%})")
+    if kw_hits >= 2:
         score += 30
-        signals.append(f"Burnout language detected ({burnout_hits} keywords)")
-    elif burnout_hits == 1:
+        signals.append(f"Burnout language detected ({kw_hits} keywords)")
+    elif kw_hits == 1:
         score += 15
-        signals.append(f"Mild burnout language ({burnout_hits} keyword)")
-    if length_decline > 0.3:
+        signals.append(f"Mild burnout language ({kw_hits} keyword)")
+    if len_decline > 0.3:
         score += 20
-        signals.append(f"Post length declining by {length_decline:.0%}")
-    if sentiment_ratio < 0.3:
+        signals.append(f"Post length declining by {len_decline:.0%}")
+    if sent_ratio < 0.3:
         score += 15
         signals.append("Sentiment skewing negative")
 
@@ -559,11 +529,11 @@ def _compute_burnout_signals(posts: List[str]) -> dict:
     return {
         "burnout_score": score,
         "signals": signals,
-        "entropy": round(normalized_entropy, 3),
-        "sentiment_drift": round(sentiment_ratio, 3),
-        "repetition_index": round(repetition_index, 3),
-        "length_decline": round(length_decline, 3),
-        "burnout_keywords_found": burnout_hits,
+        "entropy": round(entropy, 3),
+        "sentiment_drift": round(sent_ratio, 3),
+        "repetition_index": round(rep_index, 3),
+        "length_decline": round(len_decline, 3),
+        "burnout_keywords_found": kw_hits,
         "total_posts_analyzed": len(posts),
     }
 

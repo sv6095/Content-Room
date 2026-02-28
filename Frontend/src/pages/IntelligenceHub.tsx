@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
-  Loader2, Globe, Sliders, ShieldCheck, Layers, HeartPulse, Eye, Copy, Check,
+  Globe, Sliders, ShieldCheck, Layers, HeartPulse, Eye,
 } from "lucide-react";
 import {
   intelligenceAPI,
@@ -18,6 +18,7 @@ import {
   type MentalHealthResponse,
   type ShadowbanResponse,
 } from "@/services/api";
+import { Spinner, ResultBox, Chip, CopyBtn } from "@/components/shared/IntelPrimitives";
 
 // ─── Tab definitions ──────────────────────────────────────
 const TABS = [
@@ -31,48 +32,12 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-// ─── Shared helpers ───────────────────────────────────────
-function Spinner() {
-  return <Loader2 className="h-4 w-4 animate-spin" />;
-}
-
-function ResultBox({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 rounded-xl border border-border bg-muted/30 p-4 space-y-3 animate-fade-in">
-      {children}
-    </div>
-  );
-}
-
-function Chip({ text, color }: { text: string; color: "purple" | "blue" | "orange" | "green" | "red" }) {
-  const map = {
-    purple: "bg-violet-500/10 text-violet-400 border-violet-500/20",
-    blue:   "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    orange: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-    green:  "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    red:    "bg-red-500/10 text-red-400 border-red-500/20",
-  };
-  return <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${map[color]}`}>{text}</span>;
-}
-
-function CopyBtn({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-      title="Copy"
-      className="opacity-60 hover:opacity-100 transition-opacity"
-    >
-      {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-    </button>
-  );
-}
-
 function ErrMsg({ msg }: { msg: string }) {
   return <p className="text-sm text-destructive mt-2">{msg}</p>;
 }
 
 // ─── Culture Engine ───────────────────────────────────────
+
 function CultureTab() {
   const [content, setContent]   = useState("");
   const [region, setRegion]     = useState("");
@@ -448,10 +413,7 @@ function AssetsTab() {
                         item.quality_score >= 70 ? "text-emerald-400" : item.quality_score >= 45 ? "text-yellow-400" : "text-red-400"
                       }`}>⭐ {item.quality_score}</span>
                     )}
-                    <button onClick={() => handleCopy(String(idx), item.content)}
-                      title="Copy" className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity">
-                      {copied === String(idx) ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                    </button>
+                    <CopyBtn text={item.content} />
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">{item.content}</p>

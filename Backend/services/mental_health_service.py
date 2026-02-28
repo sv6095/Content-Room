@@ -6,35 +6,12 @@ Fallback: TextBlob + local linguistic entropy analysis
 Tracks "Linguistic Entropy" across recent posts to detect burnout.
 """
 import logging
-import math
-import re
 from typing import List
 from services.llm_service import get_llm_service
 from config import settings
+from utils.linguistics import compute_linguistic_entropy, detect_repeated_openers
 
 logger = logging.getLogger(__name__)
-
-
-def _linguistic_entropy(texts: List[str]) -> float:
-    """
-    Compute vocabulary diversity (Shannon entropy).
-    Low entropy = restricted vocabulary = burnout marker.
-    """
-    all_words = []
-    for t in texts:
-        words = re.findall(r'\b[a-zA-Z]{3,}\b', t.lower())
-        all_words.extend(words)
-
-    if not all_words:
-        return 0.0
-
-    word_freq = {}
-    for w in all_words:
-        word_freq[w] = word_freq.get(w, 0) + 1
-
-    total = len(all_words)
-    entropy = -sum((c / total) * math.log2(c / total) for c in word_freq.values())
-    return round(entropy, 4)
 
 
 def _avg_sentiment(texts: List[str], provider: str = "local") -> dict:
@@ -76,14 +53,7 @@ async def _aws_comprehend_batch_sentiment(texts: List[str]) -> dict:
     return _avg_sentiment(texts)
 
 
-def _detect_repetitive_phrases(texts: List[str]) -> List[str]:
-    """Detect repeated phrases/openers across posts — sign of creative stagnation."""
-    phrase_count = {}
-    for text in texts:
-        # Extract first sentence or first 10 words
-        opener = " ".join(text.split()[:8]).lower().strip(".,!?")
-        phrase_count[opener] = phrase_count.get(opener, 0) + 1
-    return [phrase for phrase, count in phrase_count.items() if count > 1]
+# _detect_repetitive_phrases delegated to utils.linguistics.detect_repeated_openers
 
 
 async def analyze_mental_health(
@@ -107,9 +77,9 @@ async def analyze_mental_health(
         }
 
     # Metrics
-    entropy = _linguistic_entropy(posts)
+    entropy = compute_linguistic_entropy(posts)
     sentiment_data = await _aws_comprehend_batch_sentiment(posts)
-    repetitive = _detect_repetitive_phrases(posts)
+    repetitive = detect_repeated_openers(posts)
 
     # Burnout score (0-100)
     burnout_score = 0
