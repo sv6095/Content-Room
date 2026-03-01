@@ -20,6 +20,7 @@ class CultureRequest(BaseModel):
     region: str
     festival: Optional[str] = None
     content_niche: Optional[str] = None
+    target_language: Optional[str] = None  # e.g. "Hindi", "Tamil", "Marathi", "Bengali"
 
 
 @router.post("/culture/rewrite")
@@ -32,6 +33,7 @@ async def culture_rewrite(request: CultureRequest):
             request.region,
             request.festival,
             request.content_niche,
+            target_language=request.target_language,
         )
         return result
     except Exception as e:

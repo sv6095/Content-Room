@@ -1,7 +1,6 @@
 """
 Multimodal Moderation Service for ContentOS
 
-Inspired by github.com/Nox-Invicte/Multil-Modal-Moderation-Pipeline
 Implements 3-tier architecture:
 1. Edge Prefilter (<100ms) - Fast heuristics
 2. Deep Analysis (1-8s) - Full AI analysis

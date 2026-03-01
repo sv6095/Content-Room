@@ -138,6 +138,7 @@ async def rewrite_for_region(
     region: str,
     festival: Optional[str] = None,
     content_niche: Optional[str] = None,
+    target_language: Optional[str] = None,
 ) -> dict:
     """
     Rewrite content using regional emotional persona.
@@ -152,9 +153,19 @@ async def rewrite_for_region(
     if festival and festival.lower() in FESTIVAL_TONES:
         festival_context = f"\nFestival Context: This is for {festival.title()}. The emotional theme is: {FESTIVAL_TONES[festival.lower()]}"
 
+    # Determine language instruction
+    lang_instruction = (
+        f"Write the output IN {target_language}. "
+        f"Apply the regional emotional persona below but use {target_language} as the output language."
+    ) if target_language and target_language.lower() not in ("", "auto", "default") else (
+        f"Use the natural language style of the region: {persona['language_style']}."
+    )
+
     prompt = f"""You are a master Bharat content strategist specializing in regional emotional adaptation.
 
 Rewrite the following content for a creator targeting the **{region.title()}** audience.
+
+{lang_instruction}
 
 Regional Persona Profile:
 - Tone: {persona['tone']}
@@ -169,7 +180,7 @@ Original Content:
 
 Rewrite Rules:
 1. Keep the CORE MESSAGE identical — only adapt the emotional wrapper.
-2. Use the regional language style naturally (don't translate, just adapt the emotion).
+2. Use the requested language naturally; do NOT translate mechanically.
 3. Start with a hook relevant to the region.
 4. Naturally incorporate at least 2 of the emotional hooks listed above.
 5. Do NOT add hashtags — the creator will add them separately.

@@ -1,12 +1,13 @@
 /**
  * Content Room API Client
  *
- * Centralized API client for all backend interactions.
- * Provides typed interfaces and error handling for the Content Room backend.
+ * All requests use relative paths (/api/v1/...) so the backend origin
+ * is never exposed in the browser's Network DevTools panel.
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-const API_V1 = `${API_BASE_URL}/api/v1`;
+// Relative path — Vite proxy (dev) or reverse-proxy (prod) routes this
+// to the backend. No raw backend URL is visible in the browser.
+const API_V1 = '/api/v1';
 
 // ============================================
 // Types & Interfaces
@@ -846,7 +847,7 @@ export const historyAPI = {
 
 export async function checkBackendHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${API_BASE_URL}/health`);
+    const response = await fetch(`${API_V1}/health`);
     return response.ok;
   } catch {
     return false;
@@ -1008,11 +1009,11 @@ export interface ShadowbanResponse {
 }
 
 export const intelligenceAPI = {
-  async cultureRewrite(content: string, region: string, festival?: string, niche?: string): Promise<CultureRewriteResponse> {
+  async cultureRewrite(content: string, region: string, festival?: string, niche?: string, targetLanguage?: string): Promise<CultureRewriteResponse> {
     const response = await fetch(`${API_V1}/intel/culture/rewrite`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, region, festival, content_niche: niche }),
+      body: JSON.stringify({ content, region, festival, content_niche: niche, target_language: targetLanguage }),
     });
     return handleResponse<CultureRewriteResponse>(response);
   },
@@ -1093,6 +1094,68 @@ export const intelligenceAPI = {
       body: JSON.stringify({ content, hashtags, platform }),
     });
     return handleResponse<ShadowbanResponse>(response);
+  },
+};
+
+// ============================================
+// Pre-Flight Pipeline API (Scheduler Integration)
+// ============================================
+
+export interface PreFlightRequest {
+  content: string;
+  region?: string;
+  target_language?: string;
+  platform?: string;
+  niche?: string;
+  risk_level?: number;
+  festival?: string;
+}
+
+export interface PreFlightSummary {
+  culture_adapted: boolean;
+  alignment_score?: number;
+  risk_tone: string;
+  safety_score?: number;
+  cancel_risk: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
+  shadowban_probability?: number;
+  content_sentiment: string;
+  assets_generated: number;
+  overall_pass: boolean;
+  errors_count: number;
+}
+
+export interface PreFlightResponse {
+  culture: CultureRewriteResponse | null;
+  risk_reach: RiskReachResponse | null;
+  anti_cancel: AntiCancelResponse | null;
+  shadowban: ShadowbanResponse | null;
+  mental_health: {
+    sentiment: string;
+    tone_advice: string;
+    provider: string;
+  } | null;
+  assets: {
+    assets: AssetItem[];
+    total_generated: number;
+  } | null;
+  errors: Record<string, string>;
+  passed: boolean;
+  summary: PreFlightSummary;
+}
+
+export const pipelineAPI = {
+  async analyze(request: PreFlightRequest): Promise<PreFlightResponse> {
+    const response = await fetch(`${API_V1}/pipeline/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return handleResponse<PreFlightResponse>(response);
+  },
+
+  async getSupportedLanguages(): Promise<{ languages: string[] }> {
+    const response = await fetch(`${API_V1}/pipeline/languages`);
+    return handleResponse<{ languages: string[] }>(response);
   },
 };
 
@@ -1265,6 +1328,7 @@ const api = {
   calendar: calendarAPI,
   intelligence: intelligenceAPI,
   novel: novelAPI,
+  pipeline: pipelineAPI,
   checkHealth: checkBackendHealth,
   setAuthToken,
   getAuthToken,

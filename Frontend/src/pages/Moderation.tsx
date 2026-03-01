@@ -419,12 +419,6 @@ export default function Moderation() {
               <CardTitle className="text-lg">Moderation Results</CardTitle>
               <CardDescription>
                 Analysis results for your submitted content
-                {result.provider && (
-                  <span className="ml-2 text-xs bg-primary/10 px-2 py-0.5 rounded inline-flex items-center gap-1">
-                    <Cpu className="h-3 w-3" />
-                    {result.provider}
-                  </span>
-                )}
                 {result.processingTime && (
                   <span className="ml-2 text-xs text-muted-foreground">
                     ({result.processingTime}ms)

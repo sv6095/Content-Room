@@ -20,6 +20,13 @@ import {
 } from "@/services/api";
 import { Spinner, ResultBox, Chip, CopyBtn } from "@/components/shared/IntelPrimitives";
 
+// ─── Supported Languages ──────────────────────────────────
+const SUPPORTED_LANGUAGES = [
+  "Auto (Region Default)", "English", "Hindi", "Hinglish",
+  "Tamil", "Tanglish", "Telugu", "Kannada", "Malayalam",
+  "Bengali", "Marathi", "Gujarati", "Punjabi", "Odia", "Urdu",
+];
+
 // ─── Tab definitions ──────────────────────────────────────
 const TABS = [
   { id: "culture", label: "Culture Engine",     icon: Globe },
@@ -32,17 +39,37 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+// ─── Shared primitives ────────────────────────────────────
 function ErrMsg({ msg }: { msg: string }) {
   return <p className="text-sm text-destructive mt-2">{msg}</p>;
 }
 
-// ─── Culture Engine ───────────────────────────────────────
+function LanguageSelect({
+  value, onChange, id,
+}: { value: string; onChange: (v: string) => void; id: string }) {
+  return (
+    <select
+      id={id}
+      aria-label="Target Language"
+      title="Target output language for the adapted content"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-ring focus:outline-none"
+    >
+      {SUPPORTED_LANGUAGES.map(l => (
+        <option key={l} value={l}>{l}</option>
+      ))}
+    </select>
+  );
+}
 
+// ─── Culture Engine ───────────────────────────────────────
 function CultureTab() {
   const [content, setContent]   = useState("");
   const [region, setRegion]     = useState("");
   const [festival, setFestival] = useState("");
   const [niche, setNiche]       = useState("");
+  const [language, setLanguage] = useState("Auto (Region Default)");
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState<CultureRewriteResponse | null>(null);
   const [error, setError]       = useState("");
@@ -51,11 +78,13 @@ function CultureTab() {
     if (!content.trim()) return;
     setLoading(true); setError(""); setResult(null);
     try {
+      const lang = language === "Auto (Region Default)" ? undefined : language;
       setResult(await intelligenceAPI.cultureRewrite(
         content,
         region.trim() || "general",
         festival.trim() || undefined,
         niche.trim() || undefined,
+        lang,
       ));
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Request failed."); }
     finally { setLoading(false); }
@@ -71,6 +100,13 @@ function CultureTab() {
               placeholder="e.g. Chennai, Gen-Z Delhi, Rajasthan…" />
           </div>
           <div className="space-y-1.5">
+            <Label htmlFor="c-lang">🌐 Output Language</Label>
+            <LanguageSelect id="c-lang" value={language} onChange={setLanguage} />
+            <p className="text-xs text-muted-foreground">
+              Select the language for the adapted content
+            </p>
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="c-festival">Festival / Occasion</Label>
             <Input id="c-festival" value={festival} onChange={e => setFestival(e.target.value)}
               placeholder="e.g. Diwali, Onam, IPL season…" />
@@ -83,7 +119,7 @@ function CultureTab() {
         </div>
         <div className="md:col-span-2 space-y-1.5">
           <Label htmlFor="c-content">Original Content</Label>
-          <Textarea id="c-content" rows={7} value={content} onChange={e => setContent(e.target.value)}
+          <Textarea id="c-content" rows={8} value={content} onChange={e => setContent(e.target.value)}
             placeholder="Paste your content here…" className="resize-none" />
         </div>
       </div>
@@ -103,21 +139,23 @@ function CultureTab() {
           <div className="flex gap-2 flex-wrap pt-1">
             <Chip text={`Region: ${result.region}`} color="purple" />
             <Chip text={`Tone: ${result.persona_applied}`} color="blue" />
+            {language !== "Auto (Region Default)" && <Chip text={`Language: ${language}`} color="green" />}
             {result.festival && <Chip text={`Festival: ${result.festival}`} color="orange" />}
           </div>
-          {/* RL + LLM Score Breakdown */}
           {result.alignment_score !== undefined && (
-            <div className="grid grid-cols-3 gap-2 text-center mt-1">
-              {[
-                { label: "Alignment Score", value: `${result.alignment_score}/100`, color: result.alignment_score >= 70 ? "text-emerald-400" : "text-yellow-400" },
-                { label: "AI Score (60%)", value: `${result.llm_score ?? "—"}`,  color: "text-blue-400" },
-                { label: "Rule Score (40%)", value: `${result.rule_alignment_score ?? "—"}`, color: "text-violet-400" },
-              ].map(({ label, value, color }) => (
-                <div key={label} className="rounded-lg bg-muted p-2">
-                  <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
-                  <p className={`text-sm font-bold ${color}`}>{value}</p>
-                </div>
-              ))}
+            <div className="flex items-center gap-3 mt-1">
+              <span className="text-xs text-muted-foreground">Alignment Score</span>
+              <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
+                <div
+                  className={`h-1.5 rounded-full ${
+                    result.alignment_score >= 70 ? 'bg-emerald-500' : result.alignment_score >= 50 ? 'bg-yellow-500' : 'bg-orange-500'
+                  }`}
+                  ref={el => { if (el) el.style.width = `${result.alignment_score}%`; }}
+                />
+              </div>
+              <span className={`text-xs font-bold ${
+                result.alignment_score >= 70 ? 'text-emerald-400' : 'text-yellow-400'
+              }`}>{result.alignment_score}/100</span>
             </div>
           )}
           {result.matched_hooks && result.matched_hooks.length > 0 && (
@@ -132,10 +170,6 @@ function CultureTab() {
               {result.violations.map((v, i) => <Chip key={i} text={v} color="red" />)}
             </div>
           )}
-          <div className="flex gap-1.5 flex-wrap pt-0.5">
-            <Chip text={`Model: ${result.provider}`} color="purple" />
-            {result.rule_provider && <Chip text={result.rule_provider} color="blue" />}
-          </div>
         </ResultBox>
       )}
     </div>
@@ -277,7 +311,6 @@ function CancelTab() {
             </span>
           </div>
 
-          {/* CRITICAL threat banner */}
           {(result as AntiCancelResponse & { has_critical_threat?: boolean }).has_critical_threat && (
             <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-3 flex items-start gap-2">
               <span className="text-red-400 text-lg shrink-0">🚨</span>
@@ -351,7 +384,6 @@ function AssetsTab() {
   const [loading, setLoading] = useState(false);
   const [result, setResult]   = useState<AssetExplosionResponse | null>(null);
   const [error, setError]     = useState("");
-  const [copied, setCopied]   = useState<string | null>(null);
 
   const run = async () => {
     if (!idea.trim()) return;
@@ -360,12 +392,6 @@ function AssetsTab() {
       setResult(await intelligenceAPI.explodeAssets(idea, niche || undefined));
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Request failed."); }
     finally { setLoading(false); }
-  };
-
-  const handleCopy = (key: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(key);
-    setTimeout(() => setCopied(null), 2000);
   };
 
   const platformEmojis: Record<string, string> = {
@@ -425,9 +451,10 @@ function AssetsTab() {
                   </div>
                 )}
                 {item.quality_score !== undefined && (
-                  <div className="flex gap-1.5 mt-2 flex-wrap">
-                    <Chip text={`AI: ${item.llm_score ?? "—"} (65%)`} color="blue" />
-                    <Chip text={`Rules: ${item.compliance_score ?? "—"} (35%)`} color="purple" />
+                  <div className="mt-1.5">
+                    <span className={`text-xs font-bold ${
+                      item.quality_score >= 70 ? 'text-emerald-400' : item.quality_score >= 45 ? 'text-yellow-400' : 'text-red-400'
+                    }`}>Quality: {item.quality_score}/100</span>
                   </div>
                 )}
               </div>
@@ -614,19 +641,13 @@ function ShadowTab() {
 
           <div className="grid grid-cols-3 gap-2 text-center mt-1">
             {[
-              { label: "Final Risk", value: `${result.shadowban_probability}%`, color: result.shadowban_probability >= 60 ? "text-red-400" : result.shadowban_probability >= 30 ? "text-yellow-400" : "text-emerald-400" },
-              { label: "AI Risk (70%)", value: result.llm_score !== undefined ? `${result.llm_score}` : "—", color: "text-blue-400" },
-              { label: "Rule Safety (30%)", value: result.rule_safety_score !== undefined ? `${result.rule_safety_score}/100` : "—", color: result.rule_safety_score !== undefined && result.rule_safety_score >= 80 ? "text-emerald-400" : "text-orange-400" },
+              { label: "Final Risk", value: `${result.shadowban_probability}%`, color: result.shadowban_probability >= 60 ? 'text-red-400' : result.shadowban_probability >= 30 ? 'text-yellow-400' : 'text-emerald-400' },
             ].map(({ label, value, color }) => (
               <div key={label} className="rounded-lg bg-muted p-2">
                 <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
                 <p className={`text-sm font-bold ${color}`}>{value}</p>
               </div>
             ))}
-          </div>
-          <div className="flex items-center gap-2 pt-1 flex-wrap">
-            <Chip text={`Model: ${result.provider}`} color="purple" />
-            {result.fallback_used && <Chip text="Fallback Used" color="orange" />}
           </div>
         </ResultBox>
       )}
@@ -654,7 +675,7 @@ export default function IntelligenceHub() {
       <div className="space-y-6 animate-fade-in">
         <div>
           <h2 className="text-2xl font-bold mb-1">⚡ Intelligence Hub</h2>
-          <p className="text-muted-foreground">Strategic AI intelligence for Bharat creators.</p>
+          <p className="text-muted-foreground">Strategic AI intelligence for creators — pick your language &amp; region.</p>
         </div>
 
         {/* Tab Bar */}
@@ -684,7 +705,7 @@ export default function IntelligenceHub() {
               {active.label}
             </CardTitle>
             <CardDescription>
-              {activeTab === "culture" && "Emotional re-adaptation for any region, culture, or occasion"}
+              {activeTab === "culture" && "Emotionally adapt your content for any region & language — now with multi-language output support"}
               {activeTab === "risk"    && "Control content risk appetite from brand-safe to maximally viral"}
               {activeTab === "cancel"  && "Pre-publication reputation defense for the Indian digital landscape"}
               {activeTab === "assets"  && "One idea → 12 platform-native content assets in parallel"}

@@ -188,7 +188,7 @@ export default function Studio() {
       const formData = new FormData();
       formData.append('file', uploadedFile);
       
-      const response = await fetch('http://localhost:8000/api/v1/create/extract-and-generate', {
+      const response = await fetch('/api/v1/create/extract-and-generate', {
         method: 'POST',
         body: formData,
       });
@@ -580,11 +580,6 @@ export default function Studio() {
                   <CardTitle className="text-lg">Generated Content</CardTitle>
                   <CardDescription>
                     Review, translate, and save your AI-generated content
-                    {generatedContent.provider && (
-                      <span className="ml-2 text-xs bg-primary/10 px-2 py-0.5 rounded">
-                        via {generatedContent.provider}
-                      </span>
-                    )}
                   </CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" onClick={handleClear}>

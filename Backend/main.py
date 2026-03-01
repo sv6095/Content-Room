@@ -4,13 +4,18 @@ Content Room Backend - Main Application Entry Point
 AWS-native AI Content Workflow Engine with resilient fallback architecture.
 All features enabled - no authentication required for AI services.
 """
+import os
+# Disable telemetry and set HuggingFace to offline to fix JSONDecodeErrors during conversion
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from pathlib import Path
 import warnings
 
-# Suppress Pydantic V2 warnings from dependencies
+
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 from fastapi import FastAPI, Request
@@ -173,34 +178,34 @@ app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["Analytic
 from routers import media
 app.include_router(media.router, prefix="/api/v1/media", tags=["Media"])
 
-# 8. Social Connect Router (NEW)
-from routers import social_connect
-app.include_router(social_connect.router, prefix="/api/v1/social", tags=["Social Media"])
 
-# 9. Content Router (My Content pipeline)
+# 8. Content Router (My Content pipeline)
 from routers import content
 app.include_router(content.router, prefix="/api/v1/content", tags=["Content"])
 
-# 10. History Router
+# 9. History Router
 from routers import history
 app.include_router(history.router, prefix="/api/v1/history", tags=["History"])
 
-# 11. Competitor Analysis Router (NEW)
+# 10. Competitor Analysis Router (NEW)
 from routers import competitor
 app.include_router(competitor.router, prefix="/api/v1/competitor", tags=["Competitor"])
 
-# 12. Content Calendar Router (NEW)
+# 11. Content Calendar Router (NEW)
 from routers import calendar
 app.include_router(calendar.router, prefix="/api/v1/calendar", tags=["Content Calendar"])
 
-# 13. Intelligence Hub Router (Cultural Emotion, Risk-Reach, DNA, Anti-Cancel, Mental Health, Asset Explosion, Shadowban)
+# 12. Intelligence Hub Router (Cultural Emotion, Risk-Reach, DNA, Anti-Cancel, Mental Health, Asset Explosion, Shadowban)
 from routers import intelligence
 app.include_router(intelligence.router, prefix="/api/v1/intel", tags=["Intelligence Hub"])
 
-# 14. Novel Hub Router (Signal Intelligence, Trend RAG, Multimodal, Auto-Publish, Burnout)
+# 13. Novel Hub Router (Signal Intelligence, Trend RAG, Multimodal, Auto-Publish, Burnout)
 from routers import novel
 app.include_router(novel.router, prefix="/api/v1/novel", tags=["Novel Hub"])
 
+# 14. Pre-Flight Pipeline Router (Unified multi-model analysis for Scheduler)
+from routers import pipeline
+app.include_router(pipeline.router, prefix="/api/v1/pipeline", tags=["Pre-Flight Pipeline"])
 
 
 @app.get("/", tags=["System"])

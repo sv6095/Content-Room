@@ -33,17 +33,14 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 /** Agent output card — unique to the Signal Intelligence multi-agent pipeline. */
-function AgentCard({ emoji, name, provider, output }: { emoji: string; name: string; provider: string; output: string }) {
+function AgentCard({ emoji, name, output }: { emoji: string; name: string; output: string }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-sm font-semibold flex items-center gap-1.5">
           <span>{emoji}</span> {name}
         </span>
-        <div className="flex items-center gap-2">
-          <Chip text={provider} color="purple" />
-          <CopyBtn text={output} />
-        </div>
+        <CopyBtn text={output} />
       </div>
       <div className="text-sm text-muted-foreground prose prose-sm dark:prose-invert max-w-none leading-relaxed">
         <ReactMarkdown>{output}</ReactMarkdown>
@@ -123,14 +120,9 @@ function SignalTab() {
 
       {result && (
         <div className="space-y-3 animate-fade-in">
-          <div className="flex gap-2 flex-wrap">
-            {result.provider_chain.map((p, i) => (
-              <Chip key={i} text={`Agent ${i+1}: ${p}`} color={i === 0 ? "blue" : i === 1 ? "purple" : "green"} />
-            ))}
-          </div>
-          <AgentCard emoji="🕵️" name={result.agents.scraper.name}    provider={result.agents.scraper.provider}    output={result.agents.scraper.output} />
-          <AgentCard emoji="📊" name={result.agents.analyst.name}     provider={result.agents.analyst.provider}     output={result.agents.analyst.output} />
-          <AgentCard emoji="🎯" name={result.agents.strategist.name}  provider={result.agents.strategist.provider}  output={result.agents.strategist.output} />
+          <AgentCard emoji="🕵️" name={result.agents.scraper.name}    output={result.agents.scraper.output} />
+          <AgentCard emoji="📊" name={result.agents.analyst.name}     output={result.agents.analyst.output} />
+          <AgentCard emoji="🎯" name={result.agents.strategist.name}  output={result.agents.strategist.output} />
         </div>
       )}
     </div>
@@ -197,7 +189,7 @@ function TrendsTab() {
           <ResultBox>
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold">📈 Trending in {result.region}</span>
-              <Chip text={result.trend_provider} color="purple" />
+              <CopyBtn text={result.trending_topics} />
             </div>
             <div className="text-sm text-muted-foreground prose prose-sm dark:prose-invert max-w-none leading-relaxed">
               <ReactMarkdown>{result.trending_topics}</ReactMarkdown>
@@ -208,10 +200,7 @@ function TrendsTab() {
           <ResultBox>
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold">✨ Trend-Enhanced Content</span>
-              <div className="flex items-center gap-2">
-                <Chip text={result.injection_provider} color="green" />
-                <CopyBtn text={result.enhanced_content} />
-              </div>
+              <CopyBtn text={result.enhanced_content} />
             </div>
             <div className="text-sm text-muted-foreground prose prose-sm dark:prose-invert max-w-none leading-relaxed">
               <ReactMarkdown>{result.enhanced_content}</ReactMarkdown>
@@ -308,10 +297,7 @@ function MultimodalTab() {
             <ResultBox key={idx}>
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold">{prod.format_name}</span>
-                <div className="flex items-center gap-2">
-                  <Chip text={prod.provider} color={prod.success ? "green" : "red"} />
-                  <CopyBtn text={prod.content} />
-                </div>
+                <CopyBtn text={prod.content} />
               </div>
               <div className="text-sm text-muted-foreground prose prose-sm dark:prose-invert max-w-none leading-relaxed">
                 <ReactMarkdown>{prod.content}</ReactMarkdown>
@@ -404,7 +390,6 @@ function PublishTab() {
                 <div className="flex items-center gap-2">
                   {preview.recommended_time && <Chip text={`⏰ ${preview.recommended_time}`} color="yellow" />}
                   <Chip text={preview.status === "ready_to_publish" ? "✅ Ready" : "❌ Failed"} color={preview.success ? "green" : "red"} />
-                  <Chip text={preview.provider} color="purple" />
                   <CopyBtn text={preview.optimized_content} />
                 </div>
               </div>
@@ -537,10 +522,7 @@ function BurnoutTab() {
           <ResultBox>
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold">📅 Self-Evolving Weekly Plan</span>
-              <div className="flex items-center gap-2">
-                <Chip text={result.schedule_provider} color="purple" />
-                <CopyBtn text={result.adapted_schedule} />
-              </div>
+              <CopyBtn text={result.adapted_schedule} />
             </div>
             <div className="text-sm text-muted-foreground prose prose-sm dark:prose-invert max-w-none leading-relaxed">
               <ReactMarkdown>{result.adapted_schedule}</ReactMarkdown>
