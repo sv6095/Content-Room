@@ -54,6 +54,7 @@ class ScheduledPost(Base):
     # Post Data
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    media_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     
     # Scheduling
     scheduled_at: Mapped[datetime] = mapped_column(

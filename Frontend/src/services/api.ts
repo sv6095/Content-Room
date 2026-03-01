@@ -170,6 +170,7 @@ export interface ScheduledPost {
   ai_optimized: boolean;
   moderation_passed: boolean;
   moderation_reason?: string;
+  media_url?: string;
   created_at: string;
 }
 

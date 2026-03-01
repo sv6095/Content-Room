@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { EmptyState } from '@/components/shared/EmptyState';
 import {
   Calendar, Clock, Plus, Trash2, Loader2, AlertCircle,
-  Rocket, CheckCircle2, XCircle, ChevronDown, ChevronUp,
+  Rocket, CheckCircle2, XCircle, ChevronDown, ChevronUp, Paperclip
 } from 'lucide-react';
 import {
   schedulerAPI,
@@ -234,6 +234,7 @@ export default function Scheduler() {
 
   // Schedule form (shown after pre-flight approval)
   const [form, setForm] = useState({ title: '', notes: '', date: '', time: '' });
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
 
   useEffect(() => { fetchPosts(); }, []);
 
@@ -285,17 +286,32 @@ export default function Scheduler() {
     setIsSubmitting(true); setError(null);
     try {
       const scheduledAt = new Date(`${form.date}T${form.time}`).toISOString();
-      const created = await schedulerAPI.createPost({
-        title: form.title.trim(),
-        description: form.notes.trim() || undefined,
-        scheduled_at: scheduledAt,
-        content_id: contentId,
-      });
+      let created: ScheduledPost;
+
+      if (mediaFile) {
+        const result = await schedulerAPI.createPostWithMedia(
+          form.title.trim(),
+          scheduledAt,
+          mediaFile,
+          form.notes.trim() || undefined,
+          platform
+        );
+        created = result.post;
+      } else {
+        created = await schedulerAPI.createPost({
+          title: form.title.trim(),
+          description: form.notes.trim() || undefined,
+          scheduled_at: scheduledAt,
+          content_id: contentId,
+          platform,
+        });
+      }
       setPosts(prev => [...prev, created].sort(
         (a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
       ));
       // Reset everything
       setForm({ title: '', notes: '', date: '', time: '' });
+      setMediaFile(null);
       setContent(''); setRegion(''); setNiche(''); setFestival('');
       setPreflightReport(null); setShowApprovalForm(false); setIsCreating(false);
     } catch (err) {
@@ -375,14 +391,26 @@ export default function Scheduler() {
             <CardContent className="space-y-5">
               {/* Content input */}
               <div className="space-y-1.5">
-                <Label htmlFor="pf-content">Content / Caption *</Label>
+                <Label htmlFor="pf-content">Content / Caption</Label>
                 <Textarea
                   id="pf-content"
-                  rows={5}
+                  rows={4}
                   placeholder="Paste your post, caption, or script here…"
                   value={content}
                   onChange={e => setContent(e.target.value)}
                   className="resize-none"
+                />
+              </div>
+
+              {/* Media input */}
+              <div className="space-y-1.5">
+                <Label htmlFor="pf-media">Upload Media (Image, Video, Document)</Label>
+                <Input
+                  id="pf-media"
+                  type="file"
+                  accept="image/*,video/*,.pdf,.doc,.docx"
+                  onChange={e => setMediaFile(e.target.files?.[0] || null)}
+                  className="cursor-pointer"
                 />
               </div>
 
@@ -457,19 +485,32 @@ export default function Scheduler() {
               </div>
 
               {/* Analyze button */}
-              {!preflightReport && (
-                <div className="flex gap-3">
+              {!preflightReport && !showApprovalForm && (
+                <div className="flex flex-col sm:flex-row gap-3">
                   <Button
                     variant="hero"
                     onClick={handleAnalyze}
                     disabled={isAnalyzing || !content.trim()}
                     className="flex-1"
                     id="pf-analyze-btn"
+                    title={!content.trim() ? "Add text content to run pre-flight checks" : ""}
                   >
                     {isAnalyzing
                       ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Running 6 AI checks in parallel…</>
                       : <><Rocket className="h-4 w-4 mr-2" />Run Pre-Flight Analysis</>
                     }
+                  </Button>
+                  <Button 
+                    variant="secondary"
+                    onClick={() => {
+                      setForm(f => ({ ...f, title: content.slice(0, 60).trim() + (content.length > 60 ? '…' : '') || mediaFile?.name || 'Scheduled Post' }));
+                      setShowApprovalForm(true);
+                      setPreflightReport(null);
+                    }}
+                    disabled={!content.trim() && !mediaFile}
+                    className="flex-1"
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-2" />Skip to Schedule
                   </Button>
                   <Button variant="outline" onClick={() => { setIsCreating(false); setPreflightReport(null); setShowApprovalForm(false); }}>
                     Cancel
@@ -588,6 +629,14 @@ export default function Scheduler() {
                         <div className="flex items-center gap-1 mt-1.5 text-xs text-muted-foreground">
                           <Clock className="h-3 w-3" />
                           {fmt(post.scheduled_at)}
+                          {post.media_url && (
+                            <div className="flex items-center gap-1 ml-3 text-primary">
+                              <Paperclip className="h-3 w-3" />
+                              <a href={`http://localhost:8000${post.media_url}`} target="_blank" rel="noreferrer" className="hover:underline">
+                                Attachment
+                              </a>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <Button
