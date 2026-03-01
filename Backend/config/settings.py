@@ -18,10 +18,9 @@ class Settings(BaseSettings):
     Priority Chain:
     1. AWS Services (primary)
     2. Groq API        — free tier, no CC  (https://console.groq.com/)
-    3. Gemini API      — free 60 QPM       (https://makersuite.google.com/app/apikey)
-    4. OpenRouter      — free 50 req/day   (https://openrouter.ai/)
-    5. Cerebras        — free tier          (https://cloud.cerebras.ai/)
-    6. Ollama / local models (offline mode)
+    3. OpenRouter      — free 50 req/day   (https://openrouter.ai/)
+    4. Cerebras        — free tier          (https://cloud.cerebras.ai/)
+    5. Ollama / local models (offline mode)
     """
     
     # ===========================================
@@ -56,7 +55,6 @@ class Settings(BaseSettings):
     # LLM Fallback Chain
     # ===========================================
     grok_api_key: Optional[str] = Field(default=None, alias="GROK_API_KEY")
-    gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
 
     # OpenRouter — free 50 req/day, no CC required
     # Sign up at https://openrouter.ai/ and generate a free API key (sk-or-v1-...)
@@ -168,14 +166,14 @@ class Settings(BaseSettings):
     def llm_provider(self) -> str:
         """
         Determine the best available LLM provider.
-        Priority: AWS Bedrock → Grok → Gemini → Ollama
+        Priority: AWS Bedrock → Grok → OpenRouter → Ollama
         """
         if self.aws_configured and self.use_aws_bedrock:
             return "aws_bedrock"
         if self.grok_api_key:
             return "grok"
-        if self.gemini_api_key:
-            return "gemini"
+        if self.openrouter_api_key:
+            return "openrouter"
         return "ollama"
     
     @property

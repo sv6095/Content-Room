@@ -429,8 +429,11 @@ Focus on providing clear, specific reasons rather than numeric scores."""
             if hasattr(self.localmod_pipeline, 'analyze_image'):
                 report = await asyncio.to_thread(self.localmod_pipeline.analyze_image, image)
             else:
-                # Fallback guess: analyze accepts image argument
-                report = await asyncio.to_thread(self.localmod_pipeline.analyze, image=image)
+                # Fallback guess: analyze accepts image as positional argument or doesn't support images
+                try:
+                    report = await asyncio.to_thread(self.localmod_pipeline.analyze, str(image))
+                except Exception:
+                    report = None
                 
             flags = []
             safety_score = 100
@@ -526,12 +529,10 @@ Focus on providing clear, specific reasons rather than numeric scores."""
         if self.opencv_net:
             tasks.append(self.analyze_image_opencv(image_bytes))
             
-        # 2. Vision Service Task (AWS Rekognition OR Gemini Vision AI)
-        # The vision service has its own fallback chain: AWS → Gemini → OpenCV
+        # The vision service has its own fallback chain: AWS → OpenCV
         # Use it if ANY provider is available (not just AWS)
         vision_has_provider = (
-            getattr(self.vision, 'aws_client', None) is not None or 
-            getattr(self.vision, 'gemini_model', None) is not None
+            getattr(self.vision, 'aws_client', None) is not None
         )
         if vision_has_provider:
             tasks.append(self.vision.analyze(image_bytes))

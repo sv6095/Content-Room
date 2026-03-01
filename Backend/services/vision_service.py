@@ -3,14 +3,9 @@ Vision Service for ContentOS
 
 AWS Rekognition-first with free fallback:
 1. AWS Rekognition - PRIMARY for hackathon
-2. Gemini Vision - AI-powered semantic analysis (FREE)
-3. OpenCV (local) - FREE fallback for basic analysis
+2. OpenCV (local) - FREE fallback for basic analysis
 
 Handles image analysis for content moderation.
-
-Two-pass moderation for edge cases:
-- Pass 1: OpenCV (fast color heuristics)
-- Pass 2: Gemini Vision (semantic understanding for violence, death, etc.)
 """
 import logging
 import base64
@@ -36,14 +31,12 @@ class VisionService:
     
     Fallback chain:
     1. AWS Rekognition - PRIMARY (cloud, accurate)
-    2. Gemini Vision - AI semantic analysis (FREE, understands context)
-    3. Groq Vision - llama-3.2-vision (FREE, good rate limits)
-    4. OpenCV - Color heuristics (fast, offline)
+    2. Groq Vision - llama-3.2-vision (FREE, good rate limits)
+    3. OpenCV - Color heuristics (fast, offline)
     """
     
     def __init__(self):
         self.aws_client = None
-        self.gemini_model = None
         self.groq_client = None
         
         # Initialize AWS Rekognition if configured
@@ -59,17 +52,6 @@ class VisionService:
                 logger.info("AWS Rekognition initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize AWS Rekognition: {e}")
-        
-        # Initialize Gemini Vision if API key is available
-        if settings.gemini_api_key:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=settings.gemini_api_key)
-                # Use current model (gemini-1.5-flash is deprecated)
-                self.gemini_model = genai.GenerativeModel('gemini-2.0-flash')
-                logger.info("Gemini Vision initialized for AI-powered image moderation (gemini-2.0-flash)")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Gemini Vision: {e}")
         
         # Initialize Groq Vision (llama-3.2-11b-vision) as backup
         if settings.grok_api_key:
@@ -138,128 +120,7 @@ class VisionService:
             logger.error(f"AWS Rekognition error: {e}")
             raise VisionError(f"AWS Rekognition failed: {e}")
     
-    async def analyze_gemini_vision(self, image_bytes: bytes) -> Dict[str, Any]:
-        """
-        Analyze image using Gemini Vision API (FREE).
-        
-        Uses AI to semantically understand image content - detects:
-        - Violence, death scenes, murder
-        - Blood, gore, injuries
-        - Weapons, dangerous objects
-        - Disturbing/distressing content
-        - Artistic depictions of violence (paintings, etc.)
-        
-        This catches content that OpenCV's color-based heuristics miss.
-        """
-        if not self.gemini_model:
-            raise VisionError("Gemini Vision not configured")
-        
-        try:
-            import PIL.Image
-            import io
-            
-            # Convert bytes to PIL Image
-            image = PIL.Image.open(io.BytesIO(image_bytes))
-            
-            # Moderation prompt for comprehensive analysis
-            moderation_prompt = """Analyze this image for content moderation. Be thorough and detect:
 
-1. VIOLENCE: Fighting, assault, murder, death scenes, bodies, casualties, war scenes
-2. BLOOD/GORE: Blood, injuries, wounds, medical trauma
-3. WEAPONS: Guns, knives, explosives, dangerous objects
-4. DISTURBING: Distressing scenes, suffering, crime scenes, accidents
-5. NSFW: Nudity, sexual content, suggestive poses
-6. HATE: Hate symbols, offensive gestures, discriminatory imagery
-
-IMPORTANT: Also detect violence in ARTISTIC content (paintings, drawings, historical art, sculptures).
-A classical painting showing a murder or death scene should be flagged as violent content.
-
-Respond in this EXACT format:
-SAFETY_SCORE: [0-100, where 100 is completely safe]
-VIOLENCE_DETECTED: [YES/NO]
-VIOLENCE_TYPE: [describe if detected, or "none"]
-NSFW_DETECTED: [YES/NO]
-DISTURBING_DETECTED: [YES/NO]
-FLAGS: [comma-separated list of detected issues, or "none"]
-DESCRIPTION: [brief description of what the image shows]
-EXPLANATION: [why this score was given]"""
-
-            response = self.gemini_model.generate_content([moderation_prompt, image])
-            response_text = response.text
-            
-            # Parse the response
-            moderation_labels = []
-            safety_score = 80  # Default
-            content_labels = []
-            
-            # Extract safety score
-            score_match = re.search(r'SAFETY_SCORE:\s*(\d+)', response_text)
-            if score_match:
-                safety_score = min(100, max(0, int(score_match.group(1))))
-            
-            # Extract violence detection
-            violence_match = re.search(r'VIOLENCE_DETECTED:\s*(YES|NO)', response_text, re.IGNORECASE)
-            if violence_match and violence_match.group(1).upper() == 'YES':
-                violence_type_match = re.search(r'VIOLENCE_TYPE:\s*(.+?)(?:\n|NSFW)', response_text)
-                violence_type = violence_type_match.group(1).strip() if violence_type_match else "Violence detected"
-                moderation_labels.append({
-                    "name": "Violence",
-                    "confidence": max(60, 100 - safety_score),
-                    "details": violence_type
-                })
-            
-            # Extract NSFW detection
-            nsfw_match = re.search(r'NSFW_DETECTED:\s*(YES|NO)', response_text, re.IGNORECASE)
-            if nsfw_match and nsfw_match.group(1).upper() == 'YES':
-                moderation_labels.append({
-                    "name": "NSFW",
-                    "confidence": max(60, 100 - safety_score)
-                })
-            
-            # Extract disturbing content detection
-            disturbing_match = re.search(r'DISTURBING_DETECTED:\s*(YES|NO)', response_text, re.IGNORECASE)
-            if disturbing_match and disturbing_match.group(1).upper() == 'YES':
-                moderation_labels.append({
-                    "name": "Disturbing",
-                    "confidence": max(50, 100 - safety_score)
-                })
-            
-            # Extract flags
-            flags_match = re.search(r'FLAGS:\s*(.+?)(?:\n|DESCRIPTION)', response_text)
-            if flags_match and flags_match.group(1).strip().lower() != 'none':
-                flags = [f.strip() for f in flags_match.group(1).split(',')]
-                for flag in flags:
-                    if flag and flag.lower() != 'none':
-                        content_labels.append({"name": flag, "confidence": 75})
-            
-            # Extract description
-            description = ""
-            desc_match = re.search(r'DESCRIPTION:\s*(.+?)(?:\n|EXPLANATION)', response_text, re.DOTALL)
-            if desc_match:
-                description = desc_match.group(1).strip()
-            
-            # Extract explanation
-            explanation = ""
-            expl_match = re.search(r'EXPLANATION:\s*(.+?)$', response_text, re.DOTALL)
-            if expl_match:
-                explanation = expl_match.group(1).strip()
-            
-            logger.info(f"Gemini Vision analysis complete: safety_score={safety_score}, flags={len(moderation_labels)}")
-            
-            return {
-                "safety_score": safety_score,
-                "moderation_labels": moderation_labels,
-                "content_labels": content_labels,
-                "provider": "gemini_vision",
-                "description": description,
-                "explanation": explanation,
-                "raw_analysis": response_text
-            }
-            
-        except Exception as e:
-            logger.error(f"Gemini Vision error: {e}")
-            raise VisionError(f"Gemini Vision failed: {e}")
-    
     async def analyze_opencv(self, image_bytes: bytes) -> Dict[str, Any]:
         """
         Analyze image using OpenCV (FREE, local).
@@ -396,11 +257,7 @@ EXPLANATION: [why this score was given]"""
         """
         Analyze image with automatic fallback chain.
         
-        Priority: AWS Rekognition → Gemini Vision (AI) → OpenCV (local)
-        
-        For edge cases (artistic violence, etc.), uses two-pass:
-        - Pass 1: Fast provider (OpenCV if no cloud)
-        - Pass 2: Gemini Vision verification if safety_score is high but uncertain
+        Priority: AWS Rekognition → OpenCV (local)
         """
         fallback_used = False
         
@@ -412,44 +269,13 @@ EXPLANATION: [why this score was given]"""
                 result["fallback_used"] = fallback_used
                 return result
             except VisionError:
-                logger.warning("AWS Rekognition failed, trying Gemini Vision...")
-                fallback_used = True
-        
-        # Try Gemini Vision (AI-powered semantic analysis)
-        if self.gemini_model:
-            try:
-                logger.info("Analyzing with Gemini Vision (AI semantic)")
-                result = await self.analyze_gemini_vision(image_bytes)
-                result["fallback_used"] = fallback_used
-                return result
-            except VisionError:
-                logger.warning("Gemini Vision failed, using OpenCV fallback")
+                logger.warning("AWS Rekognition failed, trying OpenCV fallback...")
                 fallback_used = True
         
         # Fallback to OpenCV (fast, local, but limited)
         try:
             logger.info("Analyzing with OpenCV")
             opencv_result = await self.analyze_opencv(image_bytes)
-            
-            # Two-pass verification: If OpenCV says it's safe but we have Gemini,
-            # verify with AI for edge cases (artistic violence, etc.)
-            if (opencv_result["safety_score"] >= 70 and 
-                self.gemini_model and 
-                not opencv_result.get("moderation_labels")):
-                try:
-                    logger.info("Two-pass: Verifying with Gemini Vision for edge cases")
-                    gemini_result = await self.analyze_gemini_vision(image_bytes)
-                    
-                    # If Gemini found issues that OpenCV missed, use lower score
-                    if gemini_result["safety_score"] < opencv_result["safety_score"] - 20:
-                        logger.warning(f"Gemini detected issues OpenCV missed: {gemini_result.get('moderation_labels')}")
-                        gemini_result["fallback_used"] = True
-                        gemini_result["opencv_score"] = opencv_result["safety_score"]
-                        gemini_result["verification_note"] = "AI verification caught content that color analysis missed"
-                        return gemini_result
-                except VisionError:
-                    pass  # Continue with OpenCV result
-            
             opencv_result["fallback_used"] = fallback_used
             return opencv_result
             

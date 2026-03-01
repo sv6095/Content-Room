@@ -5,14 +5,11 @@ AWS Bedrock-first with automatic fallback chain:
 1. AWS Bedrock (Claude/Titan)  — PRIMARY
 2. Groq Cloud                  — FREE tier (no CC), ultra-fast Llama 3.3 70B
                                   https://console.groq.com/
-3. Gemini (Google AI Studio)   — FREE tier 60 QPM / 1M TPD
-                                  https://makersuite.google.com/app/apikey
-4. OpenRouter                  — FREE tier 50 req/day, no CC required
+3. OpenRouter                  — FREE tier 50 req/day, no CC required
                                   Routes to Llama 3.3 70B / Gemini Flash / Mistral
                                   https://openrouter.ai/  (sign up → free API key)
-5. Cerebras Inference          — FREE tier, ultra-fast Llama 3.1 70B
+4. Cerebras Inference          — FREE tier, ultra-fast Llama 3.1 70B
                                   https://cloud.cerebras.ai/  (sign up → free API key)
-6. Ollama (Local)              — Offline mode, completely free
 7. Simple Templates            — ULTIMATE fallback (no API needed)
 
 Each provider is tried in order until one succeeds.
@@ -35,7 +32,6 @@ class LLMProvider(str, Enum):
     """Available LLM providers."""
     AWS_BEDROCK = "aws_bedrock"
     GROK = "grok"
-    GEMINI = "gemini"
     OPENROUTER = "openrouter"
     CEREBRAS = "cerebras"
     OLLAMA = "ollama"
@@ -170,41 +166,6 @@ class GrokProvider(BaseLLMProvider):
         except Exception as e:
             logger.error(f"Groq error: {e}")
             raise ProviderUnavailableError(f"Groq failed: {e}")
-
-
-class GeminiProvider(BaseLLMProvider):
-    """
-    Google Gemini provider.
-    FREE TIER: 60 requests/minute, 1M tokens/day.
-    Second fallback.
-    """
-    
-    def __init__(self):
-        self.api_key = settings.gemini_api_key
-        self.model = None
-        if self.is_available():
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel('gemini-1.5-flash')
-                logger.info("Gemini provider initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Gemini: {e}")
-    
-    def is_available(self) -> bool:
-        return bool(self.api_key)
-    
-    async def generate(self, prompt: str, **kwargs) -> str:
-        if not self.model:
-            raise ProviderUnavailableError("Gemini not configured")
-        
-        try:
-            response = self.model.generate_content(prompt)
-            return response.text
-            
-        except Exception as e:
-            logger.error(f"Gemini error: {e}")
-            raise ProviderUnavailableError(f"Gemini failed: {e}")
 
 
 class OpenRouterProvider(BaseLLMProvider):
@@ -500,8 +461,7 @@ class LLMService:
     Priority:
       1. AWS Bedrock   (primary)
       2. Groq Cloud    (free, no CC — https://console.groq.com/)
-      3. Gemini        (free 60 QPM — https://makersuite.google.com/app/apikey)
-      4. OpenRouter    (free 50 req/day — https://openrouter.ai/)
+      3. OpenRouter    (free 50 req/day — https://openrouter.ai/)
       5. Cerebras      (free tier — https://cloud.cerebras.ai/)
       6. Ollama        (local / offline)
       7. Simple Templates (always available, no API)
@@ -511,7 +471,6 @@ class LLMService:
         self.providers: List[tuple[str, BaseLLMProvider]] = [
             (LLMProvider.AWS_BEDROCK, AWSBedrockProvider()),
             (LLMProvider.GROK,        GrokProvider()),
-            (LLMProvider.GEMINI,      GeminiProvider()),
             (LLMProvider.OPENROUTER,  OpenRouterProvider()),
             (LLMProvider.CEREBRAS,    CerebrasProvider()),
             (LLMProvider.OLLAMA,      OllamaProvider()),

@@ -183,7 +183,7 @@ async def get_provider_stats():
         },
         "aws_configured": settings.aws_configured,
         "fallback_chain": {
-            "llm": ["aws_bedrock", "grok", "gemini", "ollama"],
+            "llm": ["aws_bedrock", "grok", "openrouter", "ollama"],
             "vision": ["aws_rekognition", "opencv"],
             "speech": ["aws_transcribe", "whisper"],
             "translation": ["aws_translate", "google_free"],

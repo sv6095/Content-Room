@@ -104,6 +104,9 @@ pytest-asyncio==0.23.5
 # Content Moderation (Local/Fallback)
 # ─────────────────────────────────────────────────────────
 localmod @ git+https://github.com/KOKOSde/localmod.git
+torch>=2.0.0
+torchvision>=0.15.0
+detoxify>=0.5.0
 
 # ─────────────────────────────────────────────────────────
 # Scraping / Data Collection (Reverse Virality Mining)
@@ -115,10 +118,5 @@ requests==2.31.0
 # Misc
 holidays==0.42.0
 
-# ─────────────────────────────────────────────────────────
-# Hugging Face (Free NLP Inference — no CC required)
-# Uses HF Inference API for: toxicity detection, sentiment/emotion classification
-# Models: unitary/toxic-bert, SamLowe/roberta-base-go_emotions
-# huggingface_hub provides the InferenceClient (free tier)
-# ─────────────────────────────────────────────────────────
+
 huggingface_hub==0.21.4
