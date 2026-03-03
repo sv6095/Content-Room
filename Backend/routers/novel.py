@@ -35,7 +35,7 @@ class MultimodalRequest(BaseModel):
     target_language: str = "Hindi"
 
 
-class AutoPublishRequest(BaseModel):
+class PlatformAdaptRequest(BaseModel):
     content: str
     platforms: List[str]
     niche: str
@@ -114,8 +114,8 @@ async def get_production_formats():
 
 
 @router.post("/auto-publish")
-async def auto_publish(request: AutoPublishRequest):
-    """MCP Auto-Publishing Agent — Platform Preview & Scheduling."""
+async def auto_publish(request: PlatformAdaptRequest):
+    """Platform Adapter — generates platform-optimized content previews showing how content differs per platform."""
     try:
         from services.novel_services import auto_publish_preview
         result = await auto_publish_preview(

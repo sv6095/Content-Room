@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     aws_secret_access_key: Optional[str] = Field(default=None, alias="AWS_SECRET_ACCESS_KEY")
     aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
     
+    # Amazon Bedrock — Primary LLM
+    # Claude 3 Sonnet: complex reasoning, agent workflows, cultural rewriting
+    bedrock_model_id: str = Field(
+        default="anthropic.claude-3-sonnet-20240229-v1:0",
+        alias="BEDROCK_MODEL_ID"
+    )
+
     # AWS Service Toggles
     use_aws_bedrock: bool = Field(default=True, alias="USE_AWS_BEDROCK")
     use_aws_rekognition: bool = Field(default=True, alias="USE_AWS_REKOGNITION")
@@ -39,6 +46,10 @@ class Settings(BaseSettings):
     use_aws_sagemaker: bool = Field(default=True, alias="USE_AWS_SAGEMAKER")
     use_aws_dynamodb: bool = Field(default=False, alias="USE_AWS_DYNAMODB")
     use_aws_personalize: bool = Field(default=False, alias="USE_AWS_PERSONALIZE")
+    
+    # Amazon S3 (PRIMARY storage) — raw media, generated assets, processed files
+    use_aws_s3: bool = Field(default=True, alias="USE_AWS_S3")
+    aws_s3_region: str = Field(default="us-east-1", alias="AWS_S3_REGION")
     
     # Intelligence Feature Toggles (graceful fallback if False)
     enable_culture_engine: bool = Field(default=True, alias="ENABLE_CULTURE_ENGINE")
@@ -75,32 +86,17 @@ class Settings(BaseSettings):
     firebase_credentials_path: Optional[str] = Field(default=None, alias="FIREBASE_CREDENTIALS_PATH")
     storage_path: str = Field(default="./uploads", alias="STORAGE_PATH")
     storage_base_url: str = Field(default="/uploads", alias="STORAGE_BASE_URL")
-    
-    # ===========================================
-    # Social Media APIs
-    # ===========================================
-    
-    # Twitter/X (using twikit - no API key required!)
-    twitter_username: Optional[str] = Field(default=None, alias="TWITTER_USERNAME")
-    twitter_email: Optional[str] = Field(default=None, alias="TWITTER_EMAIL")
-    twitter_password: Optional[str] = Field(default=None, alias="TWITTER_PASSWORD")
-    twitter_cookies_path: str = Field(default="./twitter_cookies.json", alias="TWITTER_COOKIES_PATH")
-    
-    # Instagram/Facebook
-    facebook_app_id: Optional[str] = Field(default=None, alias="FACEBOOK_APP_ID")
-    facebook_app_secret: Optional[str] = Field(default=None, alias="FACEBOOK_APP_SECRET")
-    instagram_redirect_uri: str = Field(
-        default="http://localhost:8000/api/v1/social/instagram/callback",
-        alias="INSTAGRAM_REDIRECT_URI"
-    )
-    
-    # LinkedIn
-    linkedin_client_id: Optional[str] = Field(default=None, alias="LINKEDIN_CLIENT_ID")
-    linkedin_client_secret: Optional[str] = Field(default=None, alias="LINKEDIN_CLIENT_SECRET")
-    linkedin_redirect_uri: str = Field(
-        default="http://localhost:8000/api/v1/social/linkedin/callback",
-        alias="LINKEDIN_REDIRECT_URI"
-    )
+
+    @property
+    def storage_provider(self) -> str:
+        """Determine the best available storage provider.
+        Priority: AWS S3 → Firebase → Local
+        """
+        if self.aws_configured and self.use_aws_s3 and self.s3_bucket_name:
+            return "aws_s3"
+        if self.firebase_storage_bucket:
+            return "firebase"
+        return "local"
     
     # ===========================================
     # Task Scheduler
@@ -117,12 +113,24 @@ class Settings(BaseSettings):
     )
     
     # ===========================================
-    # Database
+    # Database (RDS → SQLite fallback)
     # ===========================================
+    # Amazon RDS (PostgreSQL) — PRIMARY per 24-hour migration goal.
+    # Set AWS_RDS_URL to: postgresql+asyncpg://user:password@<endpoint>:5432/contentos
+    aws_rds_url: Optional[str] = Field(default=None, alias="AWS_RDS_URL")
+    
+    # SQLite fallback for local dev / offline mode
     database_url: str = Field(
-        default="sqlite+aiosqlite:///./content_room.db",
+        default="sqlite+aiosqlite:///./contentos.db",
         alias="DATABASE_URL"
     )
+
+    @property
+    def active_database_url(self) -> str:
+        """Return AWS RDS (PostgreSQL) URL if configured, else SQLite fallback."""
+        if self.aws_rds_url:
+            return self.aws_rds_url
+        return self.database_url
     
     # ===========================================
     # Security
@@ -166,10 +174,10 @@ class Settings(BaseSettings):
     def llm_provider(self) -> str:
         """
         Determine the best available LLM provider.
-        Priority: AWS Bedrock → Grok → OpenRouter → Ollama
+        Priority: AWS Bedrock (Claude 3 Sonnet) → Grok → OpenRouter → Ollama
         """
         if self.aws_configured and self.use_aws_bedrock:
-            return "aws_bedrock"
+            return "aws_bedrock"  # Uses bedrock_model_id (Claude 3 Sonnet)
         if self.grok_api_key:
             return "grok"
         if self.openrouter_api_key:

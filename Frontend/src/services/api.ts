@@ -629,157 +629,6 @@ export const translationAPI = {
   },
 };
 
-// ============================================
-// Social Connect API
-// ============================================
-
-export interface PlatformStatus {
-  platform: string;
-  configured: boolean;
-  connected: boolean;
-  auth_type: 'oauth' | 'credentials';
-  note?: string;
-}
-
-export interface AllPlatformsStatus {
-  platforms: {
-    twitter: PlatformStatus & { note: string };
-    instagram: PlatformStatus & { note: string };
-    linkedin: PlatformStatus & { note: string };
-  };
-  scheduler: {
-    running: boolean;
-    pending_posts: number;
-  };
-}
-
-export interface PublishResponse {
-  success: boolean;
-  platform: string;
-  post_id?: string;
-  post_url?: string;
-  error?: string;
-  mode?: string;
-}
-
-export const socialConnectAPI = {
-  // Get all platforms status
-  async getAllStatus(userId = 1): Promise<AllPlatformsStatus> {
-    const response = await fetch(`${API_V1}/social/status?user_id=${userId}`);
-    return handleResponse<AllPlatformsStatus>(response);
-  },
-
-  // Twitter (using credentials - no API key needed!)
-  twitter: {
-    async getStatus(userId = 1): Promise<PlatformStatus> {
-      const response = await fetch(`${API_V1}/social/twitter/status?user_id=${userId}`);
-      return handleResponse<PlatformStatus>(response);
-    },
-
-    async connect(username: string, email: string, password: string, userId = 1): Promise<{ success: boolean; message: string }> {
-      const formData = new FormData();
-      formData.append('username', username);
-      formData.append('email', email);
-      formData.append('password', password);
-      formData.append('user_id', userId.toString());
-
-      const response = await fetch(`${API_V1}/social/twitter/connect`, {
-        method: 'POST',
-        body: formData,
-      });
-      return handleResponse(response);
-    },
-
-    async connectCookies(cookies: CookieData[], userId = 1): Promise<{ success: boolean; message: string }> {
-      const response = await fetch(`${API_V1}/social/twitter/connect-cookies`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cookies, user_id: userId }),
-      });
-      return handleResponse(response);
-    },
-
-    async disconnect(userId = 1): Promise<{ success: boolean }> {
-      const response = await fetch(`${API_V1}/social/twitter/disconnect?user_id=${userId}`, {
-        method: 'DELETE',
-      });
-      return handleResponse(response);
-    },
-
-    async publish(content: string, mediaUrls?: string[], userId = 1): Promise<PublishResponse> {
-      const response = await fetch(`${API_V1}/social/twitter/publish`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, media_urls: mediaUrls, user_id: userId }),
-      });
-      return handleResponse<PublishResponse>(response);
-    },
-  },
-
-  // Instagram (OAuth via Facebook)
-  instagram: {
-    async getStatus(userId = 1): Promise<PlatformStatus> {
-      const response = await fetch(`${API_V1}/social/instagram/status?user_id=${userId}`);
-      return handleResponse<PlatformStatus>(response);
-    },
-
-    async getConnectUrl(userId = 1, redirectUri?: string): Promise<{ url: string; platform: string }> {
-      const params = new URLSearchParams({ user_id: userId.toString() });
-      if (redirectUri) params.append('redirect_uri', redirectUri);
-
-      const response = await fetch(`${API_V1}/social/instagram/connect?${params}`);
-      return handleResponse(response);
-    },
-
-    async disconnect(userId = 1): Promise<{ success: boolean }> {
-      const response = await fetch(`${API_V1}/social/instagram/disconnect?user_id=${userId}`, {
-        method: 'DELETE',
-      });
-      return handleResponse(response);
-    },
-
-    async publish(content: string, mediaUrls?: string[], userId = 1): Promise<PublishResponse> {
-      const response = await fetch(`${API_V1}/social/instagram/publish`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, media_urls: mediaUrls, user_id: userId }),
-      });
-      return handleResponse<PublishResponse>(response);
-    },
-  },
-
-  // LinkedIn (OAuth)
-  linkedin: {
-    async getStatus(userId = 1): Promise<PlatformStatus> {
-      const response = await fetch(`${API_V1}/social/linkedin/status?user_id=${userId}`);
-      return handleResponse<PlatformStatus>(response);
-    },
-
-    async getConnectUrl(userId = 1, redirectUri?: string): Promise<{ url: string; platform: string }> {
-      const params = new URLSearchParams({ user_id: userId.toString() });
-      if (redirectUri) params.append('redirect_uri', redirectUri);
-
-      const response = await fetch(`${API_V1}/social/linkedin/connect?${params}`);
-      return handleResponse(response);
-    },
-
-    async disconnect(userId = 1): Promise<{ success: boolean }> {
-      const response = await fetch(`${API_V1}/social/linkedin/disconnect?user_id=${userId}`, {
-        method: 'DELETE',
-      });
-      return handleResponse(response);
-    },
-
-    async publish(content: string, mediaUrls?: string[], userId = 1): Promise<PublishResponse> {
-      const response = await fetch(`${API_V1}/social/linkedin/publish`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, media_urls: mediaUrls, user_id: userId }),
-      });
-      return handleResponse<PublishResponse>(response);
-    },
-  },
-};
 
 // ============================================
 // History API
@@ -1223,7 +1072,7 @@ export interface PlatformPreview {
   success: boolean;
 }
 
-export interface AutoPublishResponse {
+export interface PlatformAdaptResponse {
   original_content: string;
   platforms: string[];
   niche: string;
@@ -1296,13 +1145,13 @@ export const novelAPI = {
     return handleResponse(response);
   },
 
-  async autoPublish(content: string, platforms: string[], niche: string, scheduleTime?: string): Promise<AutoPublishResponse> {
+  async platformAdapt(content: string, platforms: string[], niche: string, scheduleTime?: string): Promise<PlatformAdaptResponse> {
     const response = await fetch(`${API_V1}/novel/auto-publish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, platforms, niche, schedule_time: scheduleTime }),
     });
-    return handleResponse<AutoPublishResponse>(response);
+    return handleResponse<PlatformAdaptResponse>(response);
   },
 
   async burnoutPredict(posts: string[], niche: string, weeklyTarget?: number): Promise<BurnoutResponse> {
@@ -1323,7 +1172,6 @@ const api = {
   scheduler: schedulerAPI,
   analytics: analyticsAPI,
   translation: translationAPI,
-  socialConnect: socialConnectAPI,
   history: historyAPI,
   competitor: competitorAPI,
   calendar: calendarAPI,

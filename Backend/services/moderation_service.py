@@ -554,7 +554,7 @@ Focus on providing clear, specific reasons rather than numeric scores."""
             # return_exceptions=True ensures one failure doesn't kill the batch
             results_or_errors = await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True), 
-                timeout=30.0
+                timeout=90.0  # Allow time for cold-start model loading
             )
             
             valid_results = []

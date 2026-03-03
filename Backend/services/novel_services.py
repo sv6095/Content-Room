@@ -8,7 +8,7 @@ Features:
 1. Multi-Agent Competitor Intelligence (Signal Intelligence)
 2. Contextual RAG for Hyper-Local Trend Injection
 3. Omnichannel Multimodal Production
-4. MCP Auto-Publishing Agent
+4. Platform Adapter (Content Differences per Platform)
 5. Predictive Creator Burnout & Self-Evolving Workloads
 """
 import logging
@@ -370,7 +370,7 @@ Output the complete production document. Be detailed and professional."""
 
 
 # ═══════════════════════════════════════════════════════════════
-# 4. AUTO-PUBLISHING AGENT (MCP Simulation)
+# 4. PLATFORM ADAPTER (Content Differences per Platform)
 # ═══════════════════════════════════════════════════════════════
 
 PLATFORM_SPECS = {
@@ -406,8 +406,8 @@ async def auto_publish_preview(
     schedule_time: Optional[str] = None,
 ) -> dict:
     """
-    MCP Auto-Publishing Agent — generates platform-optimized previews
-    and publishing plans (simulation mode).
+    Platform Adapter — generates platform-optimized previews
+    showing how content differs per platform (no actual publishing).
     """
     from services.llm_service import get_llm_service
     llm = get_llm_service()

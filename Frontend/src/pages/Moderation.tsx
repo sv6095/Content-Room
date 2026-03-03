@@ -450,26 +450,6 @@ export default function Moderation() {
                 </div>
               )}
 
-              {/* Flags */}
-              <div>
-                <Label className="text-xs uppercase tracking-wide text-muted-foreground">Detected Flags</Label>
-                <div className="mt-2">
-                  {result.flags.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {result.flags.map((flag, index) => (
-                        <span
-                          key={index}
-                          className="text-sm px-3 py-1 rounded-lg bg-destructive/10 text-destructive border border-destructive/20"
-                        >
-                          {flag}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">No flags detected ✓</p>
-                  )}
-                </div>
-              </div>
 
               {/* Explanation */}
               <div>

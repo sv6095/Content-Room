@@ -7,7 +7,9 @@ All features enabled - no authentication required for AI services.
 import os
 # Disable telemetry and set HuggingFace to offline to fix JSONDecodeErrors during conversion
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
+# Uncomment this if you already downloaded the models. 
+# It's commented out so Render can download the Detoxify toxicity model on boot.
+# os.environ["HF_HUB_OFFLINE"] = "1"
 
 import logging
 from contextlib import asynccontextmanager

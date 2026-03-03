@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
-  Radar, Globe2, Clapperboard, Send, Brain, Plus, X,
+  Radar, Globe2, Clapperboard, Layers, Brain, Plus, X,
 } from "lucide-react";
 import {
   novelAPI,
@@ -14,7 +14,7 @@ import {
   type TrendInjectionResponse,
   type MultimodalResponse,
   type MultimodalProduction,
-  type AutoPublishResponse,
+  type PlatformAdaptResponse,
   type PlatformPreview,
   type BurnoutResponse,
 } from "@/services/api";
@@ -26,7 +26,7 @@ const TABS = [
   { id: "signal",    label: "Signal Intelligence",    icon: Radar },
   { id: "trends",    label: "Trend Injection RAG",    icon: Globe2 },
   { id: "multimodal",label: "Multimodal Production",  icon: Clapperboard },
-  { id: "publish",   label: "Auto-Publish Agent",     icon: Send },
+  { id: "adapt",     label: "Platform Adapter",       icon: Layers },
   { id: "burnout",   label: "Burnout Predictor",      icon: Brain },
 ] as const;
 
@@ -318,12 +318,12 @@ const PLATFORM_OPTIONS = [
   { key: "linkedin",  label: "💼 LinkedIn" },
 ];
 
-function PublishTab() {
+function AdaptTab() {
   const [content, setContent]       = useState("");
   const [niche, setNiche]           = useState("");
   const [platforms, setPlatforms]   = useState<string[]>(["instagram", "twitter"]);
   const [loading, setLoading]       = useState(false);
-  const [result, setResult]         = useState<AutoPublishResponse | null>(null);
+  const [result, setResult]         = useState<PlatformAdaptResponse | null>(null);
   const [error, setError]           = useState("");
 
   const togglePlatform = (key: string) => {
@@ -334,7 +334,7 @@ function PublishTab() {
     if (!content.trim() || !niche.trim() || !platforms.length) return;
     setLoading(true); setError(""); setResult(null);
     try {
-      setResult(await novelAPI.autoPublish(content, platforms, niche));
+      setResult(await novelAPI.platformAdapt(content, platforms, niche));
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Request failed."); }
     finally { setLoading(false); }
   };
@@ -346,8 +346,8 @@ function PublishTab() {
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <Label>Content to Publish</Label>
-        <Textarea placeholder="The content you want published across platforms..." value={content}
+        <Label>Content to Adapt</Label>
+        <Textarea placeholder="Paste your content to see how it adapts across platforms..." value={content}
           onChange={e => setContent(e.target.value)} disabled={loading} rows={4} />
       </div>
 
@@ -375,12 +375,12 @@ function PublishTab() {
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       <Button onClick={run} disabled={loading || !content.trim() || !platforms.length} className="w-full">
-        {loading ? <><Spinner /> Generating Platform Previews...</> : `📤 Generate ${platforms.length} Platform Previews`}
+        {loading ? <><Spinner /> Adapting for {platforms.length} Platforms...</> : `🔄 Adapt for ${platforms.length} Platforms`}
       </Button>
 
       {result && (
         <div className="space-y-3 animate-fade-in">
-          <p className="text-sm text-muted-foreground">{result.successful} of {result.total_platforms} platforms ready</p>
+          <p className="text-sm text-muted-foreground">{result.successful} of {result.total_platforms} platform adaptations ready</p>
           {result.previews.map((preview: PlatformPreview, idx: number) => (
             <ResultBox key={idx}>
               <div className="flex items-center justify-between">
@@ -389,7 +389,7 @@ function PublishTab() {
                 </span>
                 <div className="flex items-center gap-2">
                   {preview.recommended_time && <Chip text={`⏰ ${preview.recommended_time}`} color="yellow" />}
-                  <Chip text={preview.status === "ready_to_publish" ? "✅ Ready" : "❌ Failed"} color={preview.success ? "green" : "red"} />
+                  <Chip text={preview.status === "ready_to_publish" ? "✅ Adapted" : "❌ Failed"} color={preview.success ? "green" : "red"} />
                   <CopyBtn text={preview.optimized_content} />
                 </div>
               </div>
@@ -542,7 +542,7 @@ export default function NovelHub() {
     signal:    <SignalTab />,
     trends:    <TrendsTab />,
     multimodal:<MultimodalTab />,
-    publish:   <PublishTab />,
+    adapt:     <AdaptTab />,
     burnout:   <BurnoutTab />,
   };
 
@@ -586,7 +586,7 @@ export default function NovelHub() {
               {activeTab === "signal"    && "Multi-agent swarm intelligence that scrapes, analyzes, and generates content briefs from competitor data"}
               {activeTab === "trends"    && "RAG-powered hyper-local trend injection — enhance any content with real-time regional context"}
               {activeTab === "multimodal"&& "One seed idea → production-ready scripts for podcast, video, multilingual, thumbnails, and more"}
-              {activeTab === "publish"   && "MCP agent auto-optimizes and previews your content for every platform before publishing"}
+              {activeTab === "adapt"     && "See how your content adapts and differs for every platform — optimized length, hashtags, format, and tone"}
               {activeTab === "burnout"   && "Predictive linguistic burnout detection with AI-adapted weekly schedules that evolve in real-time"}
             </CardDescription>
           </CardHeader>

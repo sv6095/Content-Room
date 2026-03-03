@@ -1,8 +1,9 @@
 """
 Database Configuration for ContentOS
 
-Uses SQLite with async support for zero-cost deployment.
-Can be swapped to PostgreSQL for production scaling.
+Primary: Amazon RDS (PostgreSQL) when AWS_RDS_URL is set.
+Fallback: SQLite with async support for local dev / zero-cost deployment.
+The active URL is resolved by settings.active_database_url.
 """
 import logging
 from typing import AsyncGenerator
@@ -15,11 +16,21 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+# Resolve the active database URL:
+# - Amazon RDS (PostgreSQL) if AWS_RDS_URL is set  → settings.aws_rds_url
+# - SQLite fallback for local dev                  → settings.database_url
+_db_url = settings.active_database_url
+_is_sqlite = _db_url.startswith("sqlite")
+
+# SQLite requires check_same_thread=False; PostgreSQL does not need it
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
+
 # Create async engine
 engine = create_async_engine(
-    settings.database_url,
+    _db_url,
     echo=settings.debug,
     future=True,
+    connect_args=_connect_args,
 )
 
 # Session factory
