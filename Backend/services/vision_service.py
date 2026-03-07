@@ -31,7 +31,7 @@ class VisionService:
     
     Fallback chain:
     1. AWS Rekognition - PRIMARY (cloud, accurate)
-    2. Groq Vision - llama-3.2-vision (FREE, good rate limits)
+    2. Groq Vision - Llama 4 Scout (FREE, good rate limits)
     3. OpenCV - Color heuristics (fast, offline)
     """
     
@@ -53,12 +53,12 @@ class VisionService:
             except Exception as e:
                 logger.warning(f"Failed to initialize AWS Rekognition: {e}")
         
-        # Initialize Groq Vision (llama-3.2-11b-vision) as backup
+        # Initialize Groq Vision (Llama 4 Scout) as backup
         if settings.grok_api_key:
             try:
                 from groq import Groq
                 self.groq_client = Groq(api_key=settings.grok_api_key)
-                logger.info("Groq Vision initialized (llama-3.2-11b-vision-preview)")
+                logger.info("Groq Vision initialized (Llama 4 Scout)")
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq Vision: {e}")
     

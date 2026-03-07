@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,22 +8,141 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Loader2, Calendar as CalendarIcon, Download } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import * as XLSX from 'xlsx';
 import api from '@/services/api';
 import { toast } from 'sonner';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 
+const CONTENT_FORMAT_OPTIONS = ['reel', 'video', 'live', 'blog', 'story'] as const;
+type ContentFormatOption = typeof CONTENT_FORMAT_OPTIONS[number];
+
+type CalendarIdeaPayload = {
+    title: string;
+    format: string;
+    whyItWins: string;
+    tag?: string;
+    niche?: string;
+};
+
+function parseMarkdownTableToAoA(markdown: string): string[][] {
+    const lines = markdown
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('|') && line.endsWith('|'));
+
+    if (lines.length < 3) return [];
+
+    const headerIdx = lines.findIndex((line) => /Post\s*#|Date|Format/i.test(line));
+    if (headerIdx === -1 || headerIdx + 2 >= lines.length) return [];
+
+    const tableLines = lines.slice(headerIdx);
+    const rows: string[][] = [];
+
+    for (let i = 0; i < tableLines.length; i++) {
+        if (i === 1) {
+            continue;
+        }
+        const cells = tableLines[i]
+            .split('|')
+            .slice(1, -1)
+            .map((cell) => cell.trim());
+
+        if (cells.some((cell) => cell.length > 0)) {
+            rows.push(cells);
+        }
+    }
+
+    return rows;
+}
+
 const ContentCalendar: React.FC = () => {
+    const location = useLocation();
+    const prefillAppliedRef = useRef(false);
     const [month, setMonth] = useState('March');
     const [year, setYear] = useState('2026');
     const [niche, setNiche] = useState('');
     const [goals, setGoals] = useState('Engage with audience and promote services');
+    const [contentFormats, setContentFormats] = useState<string[]>([...CONTENT_FORMAT_OPTIONS]);
+    const [postsPerMonth, setPostsPerMonth] = useState('12');
     const [loading, setLoading] = useState(false);
     const [calendar, setCalendar] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (prefillAppliedRef.current) return;
+        prefillAppliedRef.current = true;
+
+        const routeState = location.state as
+            | { calendarIdea?: CalendarIdeaPayload; calendarSuggestedFormats?: string[] }
+            | null;
+
+        let idea: CalendarIdeaPayload | null = routeState?.calendarIdea ?? null;
+        let suggestedFormats = routeState?.calendarSuggestedFormats ?? [];
+
+        if (!idea) {
+            const raw = localStorage.getItem('calendar-idea-prefill');
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw) as CalendarIdeaPayload;
+                    if (parsed && parsed.title && parsed.format && parsed.whyItWins) {
+                        idea = parsed;
+                    }
+                } catch {
+                    idea = null;
+                }
+            }
+        }
+
+        if (!idea) return;
+
+        if (!niche.trim() && idea.niche?.trim()) {
+            setNiche(idea.niche.trim());
+        }
+
+        const compiledGoal = [
+            'Prioritize this competitor insight in this month plan:',
+            `Idea: ${idea.title}`,
+            `Format: ${idea.format}`,
+            `Why it wins: ${idea.whyItWins}`,
+            idea.tag ? `Tag: ${idea.tag}` : '',
+        ]
+            .filter(Boolean)
+            .join('\n');
+        setGoals(compiledGoal);
+
+        if (suggestedFormats.length === 0) {
+            const t = idea.format.toLowerCase();
+            if (t.includes('reel')) suggestedFormats.push('reel');
+            if (t.includes('story')) suggestedFormats.push('story');
+            if (t.includes('live')) suggestedFormats.push('live');
+            if (t.includes('video') || t.includes('igtv') || t.includes('youtube')) suggestedFormats.push('video');
+            if (t.includes('blog') || t.includes('article') || t.includes('thread')) suggestedFormats.push('blog');
+        }
+
+        const valid = Array.from(new Set(suggestedFormats)).filter((f): f is ContentFormatOption =>
+            (CONTENT_FORMAT_OPTIONS as readonly string[]).includes(f)
+        );
+        if (valid.length > 0) {
+            setContentFormats(valid);
+        }
+
+        setCalendar(null);
+        localStorage.removeItem('calendar-idea-prefill');
+        toast.success(`Idea "${idea.title}" added. Review and generate your calendar.`);
+    }, [location.state, niche]);
 
     const handleGenerate = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!niche) {
             toast.error("Please specify your niche.");
+            return;
+        }
+        if (contentFormats.length === 0) {
+            toast.error("Please choose at least one content format.");
+            return;
+        }
+        const parsedPostsPerMonth = parseInt(postsPerMonth, 10);
+        if (Number.isNaN(parsedPostsPerMonth) || parsedPostsPerMonth < 1 || parsedPostsPerMonth > 120) {
+            toast.error("Posts per month must be between 1 and 120.");
             return;
         }
 
@@ -34,7 +154,9 @@ const ContentCalendar: React.FC = () => {
                 month,
                 year: parseInt(year),
                 niche,
-                goals
+                goals,
+                content_formats: contentFormats,
+                posts_per_month: parsedPostsPerMonth,
             });
             setCalendar(response.calendar_markdown);
             toast.success("Calendar generated successfully!");
@@ -48,15 +170,24 @@ const ContentCalendar: React.FC = () => {
 
     const handleDownload = () => {
         if (!calendar) return;
-        const blob = new Blob([calendar], { type: 'text/markdown' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `Content-Calendar-${month}-${year}.md`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const rows = parseMarkdownTableToAoA(calendar);
+        if (rows.length === 0) {
+            toast.error("Could not parse the calendar table. Please regenerate and try again.");
+            return;
+        }
+
+        const worksheet = XLSX.utils.aoa_to_sheet(rows);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, `${month}-${year}`);
+        XLSX.writeFile(workbook, `Content-Calendar-${month}-${year}.xlsx`);
+    };
+
+    const toggleFormat = (format: string) => {
+        setContentFormats((prev) =>
+            prev.includes(format)
+                ? prev.filter((item) => item !== format)
+                : [...prev, format]
+        );
     };
 
     return (
@@ -122,6 +253,38 @@ const ContentCalendar: React.FC = () => {
                                 />
                             </div>
 
+                            <div className="space-y-2">
+                                <Label>Content Formats</Label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {CONTENT_FORMAT_OPTIONS.map((format) => {
+                                        const selected = contentFormats.includes(format);
+                                        return (
+                                            <Button
+                                                key={format}
+                                                type="button"
+                                                variant={selected ? "default" : "outline"}
+                                                onClick={() => toggleFormat(format)}
+                                                className="capitalize"
+                                            >
+                                                {format}
+                                            </Button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label htmlFor="posts-per-month">Posts Per Month</Label>
+                                <Input
+                                    id="posts-per-month"
+                                    type="number"
+                                    min={1}
+                                    max={120}
+                                    value={postsPerMonth}
+                                    onChange={(e) => setPostsPerMonth(e.target.value)}
+                                />
+                            </div>
+
                             <Button type="submit" className="w-full" disabled={loading}>
                                 {loading ? (
                                     <>
@@ -145,7 +308,7 @@ const ContentCalendar: React.FC = () => {
                             <CardTitle>Your Calendar</CardTitle>
                             <Button variant="outline" size="sm" onClick={handleDownload}>
                                 <Download className="mr-2 h-4 w-4" />
-                                Download .md
+                                Download .xlsx
                             </Button>
                         </CardHeader>
                         <CardContent className="max-h-[600px] overflow-y-auto">

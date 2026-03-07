@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { ALLOWED_LANGUAGE_CODES } from '@/constants/languages';
 
-type LanguageCode = 'en' | 'te' | 'or' | 'ta' | 'bn' | 'kn' | 'hi' | 'ml' | 'gu';
+type LanguageCode = (typeof ALLOWED_LANGUAGE_CODES)[number];
 
 interface LanguageContextType {
   language: LanguageCode;
@@ -47,7 +48,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     localStorage.setItem('app-language', language);
-    document.documentElement.className = `lang-${language}`;
+    const htmlEl = document.documentElement;
+    const existingLangClasses = Array.from(htmlEl.classList).filter((cls) => cls.startsWith('lang-'));
+    if (existingLangClasses.length > 0) {
+      htmlEl.classList.remove(...existingLangClasses);
+    }
+    htmlEl.classList.add(`lang-${language}`);
+    htmlEl.setAttribute('lang', language);
   }, [language]);
 
   const value = {

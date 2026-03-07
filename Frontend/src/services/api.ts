@@ -29,9 +29,38 @@ export interface CompetitorRequest {
   niche: string;
 }
 
+export interface CompetitorStructuredGap {
+  title: string;
+  impact: 'HIGH' | 'MEDIUM' | 'LOW';
+  effort: 'HIGH' | 'MEDIUM' | 'LOW';
+  description: string;
+  yourMove: string;
+}
+
+export interface CompetitorStructuredIdea {
+  title: string;
+  format: string;
+  whyItWins: string;
+  tag: 'Quick Win' | 'Credibility Boost' | 'Engagement Driver' | 'Long Game';
+}
+
+export interface CompetitorAnalysisStructured {
+  competitorStrategy: string;
+  scorecard: {
+    contentQuality: number | null;
+    engagement: number | null;
+    consistency: number | null;
+    innovation: number | null;
+  };
+  gaps: CompetitorStructuredGap[];
+  winningIdeas: CompetitorStructuredIdea[];
+}
+
 export interface CompetitorResponse {
   analysis: string;
   url_found: boolean;
+  source_note?: string;
+  analysis_structured?: CompetitorAnalysisStructured | null;
 }
 
 // Calendar Types
@@ -40,6 +69,8 @@ export interface CalendarRequest {
   year: number;
   niche: string;
   goals: string;
+  content_formats: string[];
+  posts_per_month: number;
 }
 
 export interface CalendarResponse {

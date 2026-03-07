@@ -8,12 +8,17 @@ The active URL is resolved by settings.active_database_url.
 import logging
 from typing import AsyncGenerator
 
+from argon2 import PasswordHasher
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+ph = PasswordHasher()
+DEFAULT_ADMIN_EMAIL = "admin@contentroom.local"
+LEGACY_ADMIN_EMAIL = "admin"
 
 
 # Resolve the active database URL:
@@ -58,6 +63,43 @@ async def init_db() -> None:
         from models import user, content, schedule
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created successfully")
+    await ensure_default_admin_user()
+
+
+async def ensure_default_admin_user() -> None:
+    """
+    Ensure a default admin user exists for local login.
+    Creates/refreshes email: admin@contentroom.local / password: shan.
+    """
+    from models.user import User
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(User).where(User.email.in_([DEFAULT_ADMIN_EMAIL, LEGACY_ADMIN_EMAIL]))
+        )
+        existing_user = result.scalar_one_or_none()
+
+        if existing_user:
+            existing_user.email = DEFAULT_ADMIN_EMAIL
+            existing_user.hashed_password = ph.hash("shan")
+            existing_user.is_active = True
+            existing_user.is_verified = True
+            if not existing_user.name:
+                existing_user.name = "Admin"
+            await session.commit()
+            logger.info("Default admin credentials refreshed")
+            return
+
+        default_user = User(
+            name="Admin",
+            email=DEFAULT_ADMIN_EMAIL,
+            hashed_password=ph.hash("shan"),
+            is_active=True,
+            is_verified=True,
+        )
+        session.add(default_user)
+        await session.commit()
+        logger.info("Default admin user created")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

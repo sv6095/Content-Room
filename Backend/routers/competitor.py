@@ -1,6 +1,7 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models.user import User
@@ -17,6 +18,8 @@ class CompetitorRequest(BaseModel):
 class CompetitorResponse(BaseModel):
     analysis: str
     url_found: bool
+    source_note: str | None = None
+    analysis_structured: dict[str, Any] | None = None
 
 @router.post("/analyze", response_model=CompetitorResponse)
 async def analyze_competitor_gaps(
@@ -31,8 +34,8 @@ async def analyze_competitor_gaps(
     """
     service = CompetitorService()
     try:
-        # Note: In a real app, this should be an async call, but the service uses async methods
-        analysis_result = await service.analyze_competitor_gaps(request.url, request.niche)
+        analysis_payload = await service.analyze_competitor_gaps_payload(request.url, request.niche)
+        analysis_result = analysis_payload["full_analysis"]
         
         # Save to history only if user is authenticated
         if current_user:
@@ -51,7 +54,9 @@ async def analyze_competitor_gaps(
         
         return CompetitorResponse(
             analysis=analysis_result,
-            url_found=True
+            url_found=True,
+            source_note=analysis_payload.get("source_note"),
+            analysis_structured=analysis_payload.get("analysis_structured"),
         )
     except Exception as e:
         await db.rollback()

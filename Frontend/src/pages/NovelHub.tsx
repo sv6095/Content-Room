@@ -20,6 +20,7 @@ import {
 } from "@/services/api";
 import ReactMarkdown from "react-markdown";
 import { Spinner, ResultBox, Chip, CopyBtn } from "@/components/shared/IntelPrimitives";
+import { ALLOWED_LANGUAGE_OPTIONS } from "@/constants/languages";
 
 // ─── Tab definitions ──────────────────────────────────────
 const TABS = [
@@ -261,7 +262,7 @@ function MultimodalTab() {
           <Label htmlFor="mm-lang">Primary Language</Label>
           <select id="mm-lang" title="Primary Language" value={language} onChange={e => setLanguage(e.target.value)} disabled={loading}
             className="w-full h-9 rounded-lg border border-border bg-background px-3 text-sm">
-            {["Hindi","Tamil","Telugu","Bengali","Marathi","Kannada","English"].map(l => (
+            {ALLOWED_LANGUAGE_OPTIONS.map(l => (
               <option key={l} value={l}>{l}</option>
             ))}
           </select>
@@ -313,6 +314,7 @@ function MultimodalTab() {
 // ─── 4. Auto-Publish Agent ───────────────────────────────
 const PLATFORM_OPTIONS = [
   { key: "instagram", label: "📸 Instagram" },
+  { key: "facebook",  label: "📘 Facebook" },
   { key: "youtube",   label: "▶️ YouTube" },
   { key: "twitter",   label: "🐦 Twitter/X" },
   { key: "linkedin",  label: "💼 LinkedIn" },
@@ -340,7 +342,7 @@ function AdaptTab() {
   };
 
   const platformIcons: Record<string, string> = {
-    instagram: "📸", youtube: "▶️", twitter: "🐦", linkedin: "💼",
+    instagram: "📸", facebook: "📘", youtube: "▶️", twitter: "🐦", linkedin: "💼",
   };
 
   return (

@@ -517,87 +517,164 @@ Focus on providing clear, specific reasons rather than numeric scores."""
             logger.error(f"OpenCV analysis error: {e}")
             raise
 
+    async def analyze_image_groq_vision(self, image_bytes: bytes) -> Dict[str, Any]:
+        """
+        Analyze image using Groq Vision LLM (Llama 4 Scout).
+        This is the most accurate provider since it actually understands image content.
+        """
+        if not getattr(self.vision, 'groq_client', None):
+            raise Exception("Groq Vision not available")
+        
+        try:
+            import base64
+            import asyncio
+            
+            b64_image = base64.b64encode(image_bytes).decode("utf-8")
+            
+            def _call_groq():
+                return self.vision.groq_client.chat.completions.create(
+                    model="meta-llama/llama-4-scout-17b-16e-instruct",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "You are an image content moderation AI. Analyze this image for safety.\n"
+                                    "Check for: violence, gore, blood, wounds, nudity, weapons, drugs, self-harm, hate symbols.\n\n"
+                                    "Reply in EXACTLY this format (one line each):\n"
+                                    "SAFETY_SCORE: [0-100, 100=perfectly safe]\n"
+                                    "FLAGS: [comma-separated list OR none]\n"
+                                    "DECISION: [ALLOW/FLAG/ESCALATE]"
+                                ),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"},
+                            },
+                        ],
+                    }],
+                    max_tokens=150,
+                    temperature=0.1,
+                )
+            
+            response = await asyncio.to_thread(_call_groq)
+            text = response.choices[0].message.content.strip()
+            
+            # Parse structured response
+            safety_score = 50  # default to review
+            flags = []
+            
+            for line in text.split("\n"):
+                line_upper = line.strip().upper()
+                if "SAFETY_SCORE:" in line_upper:
+                    try:
+                        score_str = line.split(":", 1)[1].strip().split("/")[0].split(" ")[0]
+                        safety_score = int(score_str)
+                    except (ValueError, IndexError):
+                        pass
+                elif "FLAGS:" in line_upper:
+                    flag_str = line.split(":", 1)[1].strip()
+                    if flag_str.lower() not in ("none", "n/a", ""):
+                        flags = [f.strip().lower() for f in flag_str.split(",") if f.strip()]
+            
+            return {
+                "safety_score": max(0, min(100, safety_score)),
+                "flags": flags,
+                "provider": "groq_vision",
+            }
+        except Exception as e:
+            logger.warning(f"Groq Vision moderation failed: {e}")
+            raise
+
     async def analyze_image(self, image_bytes: bytes) -> Dict[str, Any]:
         """
         Analyze image with multiple providers in parallel.
+        Each provider has its own timeout so one slow provider can't block the rest.
         Returns the most conservative result (lowest safety score).
         """
         import asyncio
+        
+        async def _with_timeout(coro, name: str, timeout: float = 20.0):
+            """Wrap a provider coroutine with its own individual timeout."""
+            try:
+                result = await asyncio.wait_for(coro, timeout=timeout)
+                logger.info(f"Moderation provider '{name}' completed: score={result.get('safety_score')}, flags={result.get('flags', [])}")
+                return result
+            except asyncio.TimeoutError:
+                logger.warning(f"Moderation provider '{name}' timed out ({timeout}s)")
+                return None
+            except Exception as e:
+                logger.warning(f"Moderation provider '{name}' failed: {e}")
+                return None
+        
         tasks = []
         
-        # 1. OpenCV Task (Yahoo Open NSFW model)
-        if self.opencv_net:
-            tasks.append(self.analyze_image_opencv(image_bytes))
-            
-        # The vision service has its own fallback chain: AWS → OpenCV
-        # Use it if ANY provider is available (not just AWS)
-        vision_has_provider = (
-            getattr(self.vision, 'aws_client', None) is not None
-        )
-        if vision_has_provider:
-            tasks.append(self.vision.analyze(image_bytes))
-            
-        # 3. LocalMod (Include in parallel if available)
-        if self.localmod_pipeline:
-            tasks.append(self.analyze_image_local(image_bytes))
+        # 1. Groq Vision LLM (PRIMARY — actually understands image content)
+        if getattr(self.vision, 'groq_client', None) is not None:
+            tasks.append(_with_timeout(
+                self.analyze_image_groq_vision(image_bytes), "groq_vision", timeout=25.0
+            ))
         
-        # 4. Deep Moderation (NudeNet + CLIP) - fcakyon inspired
-        # This runs locally and can detect NSFW (NudeNet) + Violence (CLIP)
-        if self.deep_moderation:
-            tasks.append(self.deep_moderation.analyze_image(image_bytes))
+        # 2. OpenCV NSFW (fast, local, nudity-only)
+        if self.opencv_net:
+            tasks.append(_with_timeout(
+                self.analyze_image_opencv(image_bytes), "opencv_nsfw", timeout=10.0
+            ))
+            
+        # 3. AWS Rekognition (if configured)
+        if getattr(self.vision, 'aws_client', None) is not None:
+            tasks.append(_with_timeout(
+                self.vision.analyze(image_bytes), "aws_rekognition", timeout=15.0
+            ))
+            
+        # 4. LocalMod
+        if self.localmod_pipeline:
+            tasks.append(_with_timeout(
+                self.analyze_image_local(image_bytes), "localmod", timeout=15.0
+            ))
+        
+        # 5. Deep Moderation (ResNet)
+        if self.deep_moderation and hasattr(self.deep_moderation, 'resnet_model'):
+            tasks.append(_with_timeout(
+                self.deep_moderation.analyze_image(image_bytes), "resnet", timeout=15.0
+            ))
             
         if not tasks:
             return {"safety_score": 0, "flags": ["configuration_error"], "provider": "error"}
 
-        try:
-            # Run all configured providers with a timeout
-            # return_exceptions=True ensures one failure doesn't kill the batch
-            results_or_errors = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True), 
-                timeout=90.0  # Allow time for cold-start model loading
-            )
-            
-            valid_results = []
-            for res in results_or_errors:
-                if isinstance(res, dict) and "safety_score" in res:
-                    valid_results.append(res)
-                elif isinstance(res, Exception):
-                    logger.warning(f"Moderation provider failed: {res}")
+        # Run all providers in parallel — each has its own timeout
+        all_results = await asyncio.gather(*tasks)
+        
+        # Filter to valid results (not None from timeout/errors)
+        valid_results = [r for r in all_results if r is not None and isinstance(r, dict) and "safety_score" in r]
 
-            if not valid_results:
-                return {"safety_score": 0, "flags": ["analysis_failed"], "provider": "error"}
+        if not valid_results:
+            return {"safety_score": 0, "flags": ["all_providers_failed"], "provider": "error"}
 
-            # Normalize flags: some providers return "flags" (strings), others "moderation_labels" (dicts with "name")
-            def _flags_from(r):
-                f = r.get("flags", [])
-                if f and isinstance(f[0], dict):
-                    return [x.get("name", "") for x in f if x.get("name")]
-                out = [x for x in f if x]
-                if not out and r.get("moderation_labels"):
-                    out = [x.get("name", "") for x in r["moderation_labels"] if x.get("name")]
-                return out
+        # Normalize flags
+        def _flags_from(r):
+            f = r.get("flags", [])
+            if f and isinstance(f[0], dict):
+                return [x.get("name", "") for x in f if x.get("name")]
+            out = [x for x in f if x]
+            if not out and r.get("moderation_labels"):
+                out = [x.get("name", "") for x in r["moderation_labels"] if x.get("name")]
+            return out
 
-            # Aggregation: Take the result with the lowest safety score (most conservative)
-            best_result = min(valid_results, key=lambda x: x["safety_score"])
-            all_flags = []
-            for r in valid_results:
-                all_flags.extend(_flags_from(r))
-            
-            if all_flags and best_result["safety_score"] > 80:
-                # If flags found but score is high, forcibly lower it slightly
-                best_result["safety_score"] = 75
-            
-            best_result["flags"] = list({str(f).strip() for f in all_flags if f})
-            best_result["provider"] = f"ensemble({len(valid_results)})"
-            
-            return best_result
-
-        except asyncio.TimeoutError:
-            logger.error("Moderation timed out")
-            return {"safety_score": 0, "flags": ["timeout"], "provider": "timeout"}
-        except Exception as e:
-            logger.error(f"Moderation error: {e}")
-            return {"safety_score": 0, "flags": ["system_error"], "provider": "error"}
+        # Aggregation: most conservative result (lowest safety score)
+        best_result = min(valid_results, key=lambda x: x["safety_score"])
+        all_flags = []
+        for r in valid_results:
+            all_flags.extend(_flags_from(r))
+        
+        if all_flags and best_result["safety_score"] > 80:
+            best_result["safety_score"] = 75
+        
+        best_result["flags"] = list({str(f).strip() for f in all_flags if f})
+        best_result["provider"] = f"ensemble({len(valid_results)})"
+        
+        return best_result
     
     async def analyze_audio(self, audio_bytes: bytes, filename: str) -> Dict[str, Any]:
         """

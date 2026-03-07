@@ -52,7 +52,7 @@ export default function Studio() {
   const [isTranslating, setIsTranslating] = useState(false);
 
   // Customization state
-  const [targetPlatform, setTargetPlatform] = useState<'twitter' | 'instagram' | 'linkedin' | 'custom'>('twitter');
+  const [targetPlatform, setTargetPlatform] = useState<'twitter' | 'instagram' | 'facebook' | 'linkedin' | 'custom'>('twitter');
   const [captionLength, setCaptionLength] = useState(280);
   const [hashtagCount, setHashtagCount] = useState(5);
 
@@ -64,6 +64,7 @@ export default function Studio() {
   const platformPresets = {
     twitter: { length: 280, name: 'Twitter/X' },
     instagram: { length: 2200, name: 'Instagram' },
+    facebook: { length: 63206, name: 'Facebook' },
     linkedin: { length: 3000, name: 'LinkedIn' },
     custom: { length: captionLength, name: 'Custom' },
   };
@@ -458,6 +459,7 @@ export default function Studio() {
                       <SelectContent>
                         <SelectItem value="twitter">🐦 Twitter/X (280)</SelectItem>
                         <SelectItem value="instagram">📸 Instagram (2200)</SelectItem>
+                        <SelectItem value="facebook">📘 Facebook (63206)</SelectItem>
                         <SelectItem value="linkedin">💼 LinkedIn (3000)</SelectItem>
                         <SelectItem value="custom">⚙️ Custom</SelectItem>
                       </SelectContent>

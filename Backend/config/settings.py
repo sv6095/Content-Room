@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     # ===========================================
     # External Services
     # ===========================================
+    youtube_api_key: Optional[str] = Field(default=None, alias="YOUTUBE_API_KEY")
+
     moderation_service_url: str = Field(
         default="http://localhost:8001", 
         alias="MODERATION_SERVICE_URL"

@@ -19,12 +19,12 @@ import {
   type ShadowbanResponse,
 } from "@/services/api";
 import { Spinner, ResultBox, Chip, CopyBtn } from "@/components/shared/IntelPrimitives";
+import { ALLOWED_LANGUAGE_OPTIONS } from "@/constants/languages";
 
 // ─── Supported Languages ──────────────────────────────────
 const SUPPORTED_LANGUAGES = [
-  "Auto (Region Default)", "English", "Hindi", "Hinglish",
-  "Tamil", "Tanglish", "Telugu", "Kannada", "Malayalam",
-  "Bengali", "Marathi", "Gujarati", "Punjabi", "Odia", "Urdu",
+  "Auto (Region Default)",
+  ...ALLOWED_LANGUAGE_OPTIONS,
 ];
 
 // ─── Tab definitions ──────────────────────────────────────
@@ -225,6 +225,7 @@ function RiskTab() {
           <select id="r-platform" aria-label="Platform" value={platform} onChange={e => setPlatform(e.target.value)}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-ring focus:outline-none">
             <option value="instagram">Instagram</option>
+            <option value="facebook">Facebook</option>
             <option value="twitter">Twitter / X</option>
             <option value="youtube">YouTube</option>
             <option value="linkedin">LinkedIn</option>
@@ -396,7 +397,7 @@ function AssetsTab() {
 
   const platformEmojis: Record<string, string> = {
     tweet: "🐦", instagram_caption: "📸", linkedin_post: "💼",
-    youtube_title: "▶️", youtube_description: "📄", tiktok_hook: "🎵",
+    youtube_title: "▶️", youtube_description: "📄",
     whatsapp_status: "💬", facebook_post: "👍", reddit_headline: "🔖",
     email_subject: "📧", blog_intro: "✍️", push_notification: "🔔",
   };
@@ -573,9 +574,9 @@ function ShadowTab() {
           <select id="sb-platform" aria-label="Platform" value={platform} onChange={e => setPlatform(e.target.value)}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-ring focus:outline-none">
             <option value="instagram">Instagram</option>
+            <option value="facebook">Facebook</option>
             <option value="twitter">Twitter / X</option>
             <option value="youtube">YouTube</option>
-            <option value="tiktok">TikTok</option>
           </select>
         </div>
         <div className="md:col-span-2 space-y-1.5">

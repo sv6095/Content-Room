@@ -15,6 +15,8 @@ class CalendarRequest(BaseModel):
     year: int
     niche: str
     goals: str
+    content_formats: list[str]
+    posts_per_month: int
 
 class CalendarResponse(BaseModel):
     calendar_markdown: str
@@ -37,14 +39,39 @@ async def generate_calendar(
         if request.month not in valid_months:
             raise HTTPException(status_code=400, detail="Invalid month. Use full English name (e.g. January).")
             
-        calendar_text = await service.generate_calendar(request.month, request.year, request.niche, request.goals)
+        allowed_formats = {"reel", "video", "live", "blog", "story"}
+        cleaned_formats = [fmt.strip().lower() for fmt in request.content_formats if fmt and fmt.strip()]
+        if not cleaned_formats:
+            raise HTTPException(status_code=400, detail="Please select at least one content format.")
+        invalid_formats = [fmt for fmt in cleaned_formats if fmt not in allowed_formats]
+        if invalid_formats:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid content formats: {', '.join(invalid_formats)}. Allowed: reel, video, live, blog, story."
+            )
+
+        if request.posts_per_month < 1 or request.posts_per_month > 120:
+            raise HTTPException(status_code=400, detail="posts_per_month must be between 1 and 120.")
+
+        calendar_text = await service.generate_calendar(
+            request.month,
+            request.year,
+            request.niche,
+            request.goals,
+            cleaned_formats,
+            request.posts_per_month,
+        )
         
         # Save to history only if user is authenticated
         if current_user:
             content_item = Content(
                 user_id=current_user.id,
                 content_type="content_calendar",
-                original_text=f"Generated calendar for {request.month} {request.year}. Niche: {request.niche}. Goals: {request.goals}",
+                original_text=(
+                    f"Generated calendar for {request.month} {request.year}. "
+                    f"Niche: {request.niche}. Goals: {request.goals}. "
+                    f"Formats: {', '.join(cleaned_formats)}. Posts/month: {request.posts_per_month}"
+                ),
                 summary=calendar_text,
                 caption=f"Content Calendar: {request.month} {request.year}",
                 moderation_status=ModerationStatus.SAFE.value,
@@ -55,6 +82,9 @@ async def generate_calendar(
             await db.refresh(content_item)
         
         return CalendarResponse(calendar_markdown=calendar_text)
+    except HTTPException:
+        await db.rollback()
+        raise
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

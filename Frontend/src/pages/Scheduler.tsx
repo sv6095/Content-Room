@@ -18,15 +18,12 @@ import {
   type PreFlightResponse,
   APIError,
 } from '@/services/api';
+import { ALLOWED_LANGUAGE_OPTIONS } from '@/constants/languages';
 
-// ─── Supported language list (mirrors backend) ─────────────
-const LANGUAGES = [
-  "English", "Hindi", "Hinglish", "Tamil", "Tanglish",
-  "Telugu", "Kannada", "Malayalam", "Bengali", "Marathi",
-  "Gujarati", "Punjabi", "Odia", "Urdu",
-];
+// ─── Supported language list ───────────────────────────────
+const LANGUAGES = [...ALLOWED_LANGUAGE_OPTIONS];
 
-const PLATFORMS = ["instagram", "twitter", "youtube", "linkedin", "tiktok"];
+const PLATFORMS = ["instagram", "facebook", "twitter", "youtube", "linkedin"];
 
 // ─── Pre-Flight Report UI ─────────────────────────────────
 function ScorePill({

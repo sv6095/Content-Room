@@ -68,7 +68,7 @@ pandas==2.2.0
 # ─────────────────────────────────────────────────────────
 # Audio Processing (Free/Local) — AWS Transcribe primary
 # ─────────────────────────────────────────────────────────
-openai-whisper==20231117
+openai-whisper==20250625
 pydub==0.25.1
 SpeechRecognition==3.10.1
 
@@ -124,3 +124,5 @@ holidays==0.42.0
 
 
 huggingface_hub==0.21.4
+
+openai-whisper
