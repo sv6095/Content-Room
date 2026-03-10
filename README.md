@@ -8,7 +8,7 @@
 
 **India's First AI-Powered Content Workflow Platform for the Creator Economy**
 
-*Hackathon Submission 2025  ·  Confidential*
+*Hackathon Submission 2026
 
 
 # **1. What Is Content Room?**
