@@ -50,6 +50,9 @@ export default function Moderation() {
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
 
+  const decisionToStatus = (decision?: string): 'safe' | 'warning' | 'unsafe' =>
+    decision === 'ALLOW' ? 'safe' : decision === 'FLAG' ? 'warning' : 'unsafe';
+
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -112,7 +115,12 @@ export default function Moderation() {
     
     try {
       let apiResult;
-      
+
+      if (videoFile && (content.trim() || imageFile || audioFile)) {
+        setError('Video cannot be combined in multimodal analysis right now.');
+        return;
+      }
+
       // Determine if we need multimodal analysis
       const hasMultipleInputs = (content.trim() ? 1 : 0) + (imageFile ? 1 : 0) + (audioFile ? 1 : 0) + (videoFile ? 1 : 0) > 1;
       
@@ -125,45 +133,32 @@ export default function Moderation() {
         );
         setResult(transformResult(apiResult, true));
       } else if (videoFile) {
-        // Video only - analyze frames using backend
-        const videoRes = await moderationAPI.moderateVideo(videoFile);
-        const status: 'safe' | 'warning' | 'unsafe' = 
-          (videoRes.decision || 'ALLOW') === 'ALLOW' ? 'safe' :
-          (videoRes.decision || 'ALLOW') === 'FLAG' ? 'warning' : 'unsafe';
-        
-        const framesInfo = videoRes.video_info 
-          ? `Analyzed ${videoRes.video_info.frames_analyzed} frames from ${videoRes.video_info.duration_seconds}s video.`
-          : '';
-        
-        setResult({
-          explanation: `Video "${videoFile.name}" analyzed. ${framesInfo}`,
-          flaggedContent: '',
-          flags: videoRes.flags || [],
-          status,
-          decision: videoRes.decision || 'ALLOW',
-          provider: (videoRes as unknown as { provider?: string }).provider,
-        });
+        setError('Video moderation is currently unavailable.');
       } else if (imageFile) {
         // Image only
         const imageRes = await moderationAPI.moderateImage(imageFile);
+        const decision = (imageRes as unknown as { decision?: string }).decision || 'ALLOW';
         setResult({
           explanation: `Image "${imageFile.name}" analyzed.`,
           flaggedContent: '',
           flags: (imageRes as unknown as { flags?: string[] }).flags || [],
-          status: (imageRes as unknown as { is_safe?: boolean }).is_safe !== false ? 'safe' : 'unsafe',
-          decision: (imageRes as unknown as { is_safe?: boolean }).is_safe !== false ? 'ALLOW' : 'FLAG',
+          status: decisionToStatus(decision),
+          decision,
+          provider: (imageRes as unknown as { provider?: string }).provider,
         });
       } else if (audioFile) {
         // Audio only
         const audioRes = await moderationAPI.moderateAudio(audioFile);
+        const decision = (audioRes as unknown as { decision?: string }).decision || 'ALLOW';
         setResult({
           explanation: audioRes.transcript 
             ? `Audio transcribed: "${audioRes.transcript.substring(0, 100)}${audioRes.transcript.length > 100 ? '...' : ''}"`
             : `Audio "${audioFile.name}" analyzed.`,
           flaggedContent: '',
           flags: (audioRes as unknown as { flags?: string[] }).flags || [],
-          status: 'safe',
-          decision: (audioRes as unknown as { decision?: string }).decision || 'ALLOW',
+          status: decisionToStatus(decision),
+          decision,
+          provider: (audioRes as unknown as { provider?: string }).provider,
         });
       } else {
         // Text only

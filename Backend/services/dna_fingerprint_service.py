@@ -47,8 +47,6 @@ async def _embed_text(text: str) -> List[float]:
             runtime = boto3.client(
                 "sagemaker-runtime",
                 region_name=settings.aws_region,
-                aws_access_key_id=settings.aws_access_key_id,
-                aws_secret_access_key=settings.aws_secret_access_key,
             )
             endpoint_name = "content-room-embeddings"
             payload = json.dumps({"inputs": text})

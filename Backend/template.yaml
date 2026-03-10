@@ -1,0 +1,283 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Content Room serverless backend with Step Functions pre-flight pipeline.
+
+Parameters:
+  UsersTableName:
+    Type: String
+    Default: ContentRoom-Users
+  ContentTableName:
+    Type: String
+    Default: ContentRoom-Content
+  AnalysisTableName:
+    Type: String
+    Default: ContentRoom-Analysis
+  AICacheTableName:
+    Type: String
+    Default: ContentRoom-AICache
+  ModerationCacheTableName:
+    Type: String
+    Default: ContentRoom-ModerationCache
+  S3BucketName:
+    Type: String
+    Default: content-room-media-125903111660
+  FrontendBucketName:
+    Type: String
+    Default: content-room-frontend-125903111660
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+
+Globals:
+  Function:
+    Runtime: python3.10
+    Timeout: 30
+    MemorySize: 1024
+    Tracing: Active
+    Environment:
+      Variables:
+        AWS_S3_REGION: !Ref AWS::Region
+        USE_AWS_BEDROCK: "true"
+        USE_AWS_REKOGNITION: "true"
+        USE_AWS_TRANSCRIBE: "true"
+        USE_AWS_TRANSLATE: "true"
+        USE_AWS_COMPREHEND: "true"
+        USE_AWS_DYNAMODB: "true"
+        USERS_TABLE: !Ref UsersTableName
+        CONTENT_TABLE: !Ref ContentTableName
+        ANALYSIS_TABLE: !Ref AnalysisTableName
+        AI_CACHE_TABLE: !Ref AICacheTableName
+        MODERATION_CACHE_TABLE: !Ref ModerationCacheTableName
+        S3_BUCKET_NAME: !Ref S3BucketName
+        FRONTEND_BUCKET_NAME: !Ref FrontendBucketName
+        FRONTEND_WEBSITE_URL: !Sub http://${FrontendBucketName}.s3-website.${AWS::Region}.amazonaws.com
+        MEDIA_PRIVATE_ONLY: "true"
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        STEPFUNCTIONS_PREFLIGHT_ARN: ""
+
+Resources:
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambda_handler.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSXRayDaemonWriteAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:Query
+                - dynamodb:Scan
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${UsersTableName}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ContentTableName}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AnalysisTableName}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AICacheTableName}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ModerationCacheTableName}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${UsersTableName}/index/*
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ContentTableName}/index/*
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AnalysisTableName}/index/*
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+                - states:DescribeExecution
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+                - s3:DeleteObject
+              Resource: !Sub arn:aws:s3:::${S3BucketName}/*
+      Events:
+        Root:
+          Type: HttpApi
+          Properties:
+            Path: /
+            Method: ANY
+        Proxy:
+          Type: HttpApi
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+  PreflightWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: workflows.preflight_worker.lambda_handler
+      Timeout: 120
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSXRayDaemonWriteAccess
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - rekognition:DetectModerationLabels
+                - rekognition:DetectLabels
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - comprehend:DetectSentiment
+                - comprehend:DetectEntities
+                - comprehend:DetectKeyPhrases
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - translate:TranslateText
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - transcribe:StartTranscriptionJob
+                - transcribe:GetTranscriptionJob
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AnalysisTableName}
+
+  PreflightStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: ParallelAI
+        States:
+          ParallelAI:
+            Type: Parallel
+            ResultPath: $.parallel_results
+            Branches:
+              - StartAt: BedrockTask
+                States:
+                  BedrockTask:
+                    Type: Task
+                    Resource: arn:aws:states:::lambda:invoke
+                    Parameters:
+                      FunctionName: !Ref PreflightWorkerFunction
+                      Payload:
+                        task: bedrock
+                        analysis_id.$: $.analysis_id
+                        user_id.$: $.user_id
+                        content.$: $.content
+                    OutputPath: $.Payload
+                    End: true
+              - StartAt: RekognitionTask
+                States:
+                  RekognitionTask:
+                    Type: Task
+                    Resource: arn:aws:states:::lambda:invoke
+                    Parameters:
+                      FunctionName: !Ref PreflightWorkerFunction
+                      Payload:
+                        task: rekognition
+                        image_bytes_b64.$: $.image_bytes_b64
+                    OutputPath: $.Payload
+                    End: true
+              - StartAt: ComprehendTask
+                States:
+                  ComprehendTask:
+                    Type: Task
+                    Resource: arn:aws:states:::lambda:invoke
+                    Parameters:
+                      FunctionName: !Ref PreflightWorkerFunction
+                      Payload:
+                        task: comprehend
+                        content.$: $.content
+                    OutputPath: $.Payload
+                    End: true
+              - StartAt: TranslateTask
+                States:
+                  TranslateTask:
+                    Type: Task
+                    Resource: arn:aws:states:::lambda:invoke
+                    Parameters:
+                      FunctionName: !Ref PreflightWorkerFunction
+                      Payload:
+                        task: translate
+                        content.$: $.content
+                        target_language.$: $.target_language
+                    OutputPath: $.Payload
+                    End: true
+              - StartAt: TranscribeStart
+                States:
+                  TranscribeStart:
+                    Type: Task
+                    Resource: arn:aws:states:::lambda:invoke
+                    Parameters:
+                      FunctionName: !Ref PreflightWorkerFunction
+                      Payload:
+                        task: transcribe_start
+                        media_uri.$: $.media_uri
+                        media_format.$: $.media_format
+                        language_code.$: $.language_code
+                    OutputPath: $.Payload
+                    Next: WaitForTranscription
+                  WaitForTranscription:
+                    Type: Wait
+                    Seconds: 8
+                    Next: TranscribeGet
+                  TranscribeGet:
+                    Type: Task
+                    Resource: arn:aws:states:::lambda:invoke
+                    Parameters:
+                      FunctionName: !Ref PreflightWorkerFunction
+                      Payload:
+                        task: transcribe_get
+                        transcribe.$: $
+                    OutputPath: $.Payload
+                    End: true
+            Next: AggregateResults
+          AggregateResults:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: !Ref PreflightWorkerFunction
+              Payload:
+                task: aggregate
+                analysis_id.$: $.analysis_id
+                user_id.$: $.user_id
+                bedrock.$: $.parallel_results[0].bedrock
+                rekognition.$: $.parallel_results[1].rekognition
+                comprehend.$: $.parallel_results[2].comprehend
+                translate.$: $.parallel_results[3].translate
+                transcribe.$: $.parallel_results[4].transcribe
+            OutputPath: $.Payload
+            End: true
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PreflightWorkerFunction
+
+  ScheduledPublisherRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: One-time/periodic trigger for content publish checks.
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ApiFunction.Arn
+          Id: ApiSchedulerTarget
+
+  ScheduledPublisherPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledPublisherRule.Arn
+
+Outputs:
+  ApiUrl:
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  ApiFunctionArn:
+    Value: !GetAtt ApiFunction.Arn
+  PreflightStateMachineArn:
+    Value: !Ref PreflightStateMachine

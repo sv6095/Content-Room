@@ -140,26 +140,21 @@ async def run_preflight_pipeline(
     # ── 5. Mental Health (single-post sentiment) ─────────────────
     async def run_mental_health():
         try:
-            # For pipeline we just have a single piece of content, so we
-            # run a quick sentiment scan rather than requiring 5+ posts.
-            from services.llm_service import get_llm_service
-            llm = get_llm_service()
-            prompt = (
-                "You are a creator wellness advisor. Analyze the sentiment "
-                "and emotional tone of this single piece of content:\n"
-                f"{content}\n\n"
-                "Reply ONLY:\n"
-                "SENTIMENT: [POSITIVE/NEUTRAL/NEGATIVE]\n"
-                "TONE_ADVICE: [1 short sentence for the creator]"
+            import boto3
+
+            client = boto3.client("comprehend")
+            sentiment_res = client.detect_sentiment(Text=content, LanguageCode="en")
+            sentiment = sentiment_res.get("Sentiment", "NEUTRAL").upper()
+            tone_advice = (
+                "Keep this tone, it reads positive." if sentiment == "POSITIVE"
+                else "Consider softening wording for audience wellness." if sentiment == "NEGATIVE"
+                else "Neutral tone detected; add more empathy for connection."
             )
-            res = await llm.generate(prompt, task="pipeline_sentiment", max_tokens=80)
-            import re
-            sent_m = re.search(r"SENTIMENT:\s*(\w+)", res["text"], re.IGNORECASE)
-            adv_m = re.search(r"TONE_ADVICE:\s*(.+?)$", res["text"], re.IGNORECASE | re.DOTALL)
             return {
-                "sentiment": sent_m.group(1).upper() if sent_m else "NEUTRAL",
-                "tone_advice": adv_m.group(1).strip() if adv_m else "Keep creating — your content looks good!",
-                "provider": res["provider"],
+                "sentiment": sentiment,
+                "tone_advice": tone_advice,
+                "provider": "aws_comprehend",
+                "scores": sentiment_res.get("SentimentScore", {}),
             }
         except Exception as e:
             logger.warning(f"Pipeline: mental_health failed: {e}")

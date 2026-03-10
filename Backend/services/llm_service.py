@@ -85,8 +85,6 @@ class AWSBedrockProvider(BaseLLMProvider):
                 self.client = boto3.client(
                     'bedrock-runtime',
                     region_name=settings.aws_region,
-                    aws_access_key_id=settings.aws_access_key_id,
-                    aws_secret_access_key=settings.aws_secret_access_key,
                 )
                 logger.info("AWS Bedrock provider initialized")
             except Exception as e:
@@ -95,28 +93,50 @@ class AWSBedrockProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         return settings.aws_configured and settings.use_aws_bedrock
     
-    async def generate(self, prompt: str, model: str = "anthropic.claude-3-sonnet-20240229-v1:0", **kwargs) -> str:
+    async def generate(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
         if not self.client:
             raise ProviderUnavailableError("AWS Bedrock not configured")
         
         try:
             import json
-            
-            # Claude format for Bedrock
-            body = json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": kwargs.get("max_tokens", 1024),
-                "messages": [{"role": "user", "content": prompt}]
-            })
+            chosen_model = model or settings.bedrock_model_id
+            max_tokens = kwargs.get("max_tokens", 1024)
+
+            if chosen_model.startswith("amazon.nova"):
+                body = json.dumps(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [{"text": prompt}],
+                            }
+                        ],
+                        "inferenceConfig": {
+                            "max_new_tokens": max_tokens,
+                            "temperature": kwargs.get("temperature", 0.7),
+                        },
+                    }
+                )
+            else:
+                # Backward-compatible Anthropic format
+                body = json.dumps(
+                    {
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": max_tokens,
+                        "messages": [{"role": "user", "content": prompt}],
+                    }
+                )
             
             response = self.client.invoke_model(
-                modelId=model,
+                modelId=chosen_model,
                 body=body,
                 contentType="application/json",
                 accept="application/json"
             )
             
             result = json.loads(response['body'].read())
+            if chosen_model.startswith("amazon.nova"):
+                return result.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
             return result['content'][0]['text']
             
         except Exception as e:

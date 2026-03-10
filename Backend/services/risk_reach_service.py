@@ -53,8 +53,6 @@ async def _aws_comprehend_safety_score(text: str) -> dict:
             client = boto3.client(
                 "comprehend",
                 region_name=settings.aws_region,
-                aws_access_key_id=settings.aws_access_key_id,
-                aws_secret_access_key=settings.aws_secret_access_key,
             )
             sentiment_result = client.detect_sentiment(Text=text, LanguageCode="en")
             sentiment = sentiment_result.get("Sentiment", "NEUTRAL")

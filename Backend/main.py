@@ -12,6 +12,7 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 # os.environ["HF_HUB_OFFLINE"] = "1"
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from pathlib import Path
@@ -27,7 +28,6 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from utils.logging import setup_logging
-from database import init_db
 from middleware.rate_limiter import RateLimitMiddleware, RateLimitConfig
 
 
@@ -48,9 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Debug Mode: {settings.debug}")
     logger.info("=" * 60)
     
-    # Initialize database
-    await init_db()
-    logger.info("Database initialized")
+    logger.info("DynamoDB repositories are used for persistence")
     
     # Start background scheduler
     if settings.scheduler_enabled:
@@ -80,34 +78,23 @@ app = FastAPI(
 )
 
 
-# CORS Middleware - Use configured origins in production
-# Allow common development origins explicitly for better header support
-dev_origins = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:8080",
-    "http://localhost:8081",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:8081",
-]
+# CORS middleware must be configured before routers are included.
+origins = list(
+    dict.fromkeys(
+        [
+            "http://content-room-frontend-125903111660.s3-website.ap-south-1.amazonaws.com",
+        ]
+        + settings.cors_origins_list
+    )
+)
 
-if settings.debug:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept"],
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Rate Limiting Middleware
 rate_limit_config = RateLimitConfig(
@@ -126,14 +113,25 @@ app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.error("Unhandled exception request_id=%s error=%s", request_id, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
             "error": "internal_server_error",
+            "request_id": request_id,
             "message": str(exc) if settings.debug else "An unexpected error occurred.",
         },
     )
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["x-request-id"] = request_id
+    return response
 
 
 # Health Check
@@ -144,6 +142,8 @@ async def health_check():
         "version": "1.0.0",
         "aws_configured": settings.aws_configured,
         "llm_provider": settings.llm_provider,
+        "dynamodb_enabled": settings.use_aws_dynamodb,
+        "stepfunctions_enabled": settings.enable_stepfunctions_pipeline,
         "scheduler_enabled": settings.scheduler_enabled,
     }
 

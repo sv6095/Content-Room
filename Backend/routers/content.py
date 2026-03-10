@@ -5,18 +5,13 @@ My Content pipeline: list, get, create draft.
 Supports workflow: Create -> Moderate -> Translate -> Schedule.
 """
 import logging
+from datetime import datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-
-from database import get_db
-from models.content import Content, ModerationStatus
-from models.schedule import ScheduledPost
-from models.user import User
-from routers.auth import get_current_user
+from routers.auth import CurrentUser, get_current_user
+from services.dynamo_repositories import get_content_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,7 +33,7 @@ class ContentCreate(BaseModel):
 
 class ContentItem(BaseModel):
     """Single content item for list/detail."""
-    id: int
+    id: str
     content_type: str
     original_text: Optional[str] = None
     caption: Optional[str] = None
@@ -59,12 +54,12 @@ class ContentItem(BaseModel):
         from_attributes = True
 
 
-def _workflow_status(content: Content, is_scheduled: bool) -> str:
+def _workflow_status(content: dict, is_scheduled: bool) -> str:
     if is_scheduled:
         return "scheduled"
-    if content.translated_text:
+    if content.get("translated_text"):
         return "translated"
-    if content.moderation_status and content.moderation_status != ModerationStatus.PENDING.value and content.safety_score is not None:
+    if content.get("moderation_status") and content.get("moderation_status") != "pending" and content.get("safety_score") is not None:
         return "moderated"
     return "draft"
 
@@ -76,92 +71,80 @@ def _workflow_status(content: Content, is_scheduled: bool) -> str:
 @router.get("/", response_model=List[ContentItem])
 async def list_content(
     status_filter: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     List current user's content (My Content).
     Optional ?status_filter=draft|moderated|translated|scheduled.
     """
-    query = select(Content).where(Content.user_id == current_user.id).order_by(Content.updated_at.desc())
-    result = await db.execute(query)
-    contents = result.scalars().all()
-
-    # Resolve which items are scheduled
-    content_ids = [c.id for c in contents]
-    scheduled_query = select(ScheduledPost.content_id).where(
-        ScheduledPost.content_id.in_(content_ids),
-        ScheduledPost.content_id.isnot(None),
-    )
-    scheduled_result = await db.execute(scheduled_query)
-    scheduled_ids = {row[0] for row in scheduled_result.all() if row[0] is not None}
+    repo = get_content_repo()
+    contents = repo.list_for_user(current_user.id, record_type="content")
+    schedules = repo.list_for_user(current_user.id, record_type="scheduled")
+    scheduled_ids = {s.get("content_id") for s in schedules if s.get("content_id")}
 
     out = []
     for c in contents:
-        is_sched = c.id in scheduled_ids
+        is_sched = c.get("content_id") in scheduled_ids
         ws = _workflow_status(c, is_sched)
         if status_filter and ws != status_filter:
             continue
+        created_at = c.get("created_at", "")
+        updated_at = c.get("updated_at", created_at)
         out.append(ContentItem(
-            id=c.id,
-            content_type=c.content_type,
-            original_text=c.original_text,
-            caption=c.caption,
-            summary=c.summary,
-            hashtags=c.hashtags,
-            translated_text=c.translated_text,
-            source_language=c.source_language,
-            target_language=c.target_language,
-            moderation_status=c.moderation_status,
-            safety_score=c.safety_score,
-            moderation_explanation=c.moderation_explanation,
+            id=c["content_id"],
+            content_type=c.get("content_type", "text"),
+            original_text=c.get("original_text"),
+            caption=c.get("caption"),
+            summary=c.get("summary"),
+            hashtags=c.get("hashtags"),
+            translated_text=c.get("translated_text"),
+            source_language=c.get("source_language"),
+            target_language=c.get("target_language"),
+            moderation_status=c.get("moderation_status", "pending"),
+            safety_score=c.get("safety_score"),
+            moderation_explanation=c.get("moderation_explanation"),
             workflow_status=ws,
             is_scheduled=is_sched,
-            created_at=c.created_at.isoformat() if c.created_at else "",
-            updated_at=c.updated_at.isoformat() if c.updated_at else "",
+            created_at=created_at,
+            updated_at=updated_at,
         ))
     return out
 
 
 @router.get("/{content_id}", response_model=ContentItem)
 async def get_content(
-    content_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    content_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """Get one content item (own only)."""
-    result = await db.execute(select(Content).where(Content.id == content_id))
-    content = result.scalar_one_or_none()
+    repo = get_content_repo()
+    content = repo.get_content(content_id)
     if not content:
         raise HTTPException(status_code=404, detail="Content not found")
-    if content.user_id != current_user.id:
+    if content.get("user_id") != current_user.id or content.get("record_type") != "content":
         raise HTTPException(status_code=404, detail="Content not found")
 
     # Check if scheduled
-    sched_result = await db.execute(
-        select(ScheduledPost.id).where(
-            ScheduledPost.content_id == content_id,
-        ).limit(1)
-    )
-    is_scheduled = sched_result.scalar_one_or_none() is not None
+    schedules = repo.list_for_user(current_user.id, record_type="scheduled")
+    is_scheduled = any(p.get("content_id") == content_id for p in schedules)
 
     return ContentItem(
-        id=content.id,
-        content_type=content.content_type,
-        original_text=content.original_text,
-        caption=content.caption,
-        summary=content.summary,
-        hashtags=content.hashtags,
-        translated_text=content.translated_text,
-        source_language=content.source_language,
-        target_language=content.target_language,
-        moderation_status=content.moderation_status,
-        safety_score=content.safety_score,
-        moderation_explanation=content.moderation_explanation,
+        id=content["content_id"],
+        content_type=content.get("content_type", "text"),
+        original_text=content.get("original_text"),
+        caption=content.get("caption"),
+        summary=content.get("summary"),
+        hashtags=content.get("hashtags"),
+        translated_text=content.get("translated_text"),
+        source_language=content.get("source_language"),
+        target_language=content.get("target_language"),
+        moderation_status=content.get("moderation_status", "pending"),
+        safety_score=content.get("safety_score"),
+        moderation_explanation=content.get("moderation_explanation"),
         workflow_status=_workflow_status(content, is_scheduled),
         is_scheduled=is_scheduled,
-        created_at=content.created_at.isoformat() if content.created_at else "",
-        updated_at=content.updated_at.isoformat() if content.updated_at else "",
+        created_at=content.get("created_at", ""),
+        updated_at=content.get("updated_at", ""),
     )
 
 
@@ -172,8 +155,7 @@ async def get_content(
 @router.post("/", response_model=ContentItem, status_code=status.HTTP_201_CREATED)
 async def create_content(
     body: ContentCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Create a content draft (e.g. from Studio after generating caption/summary/hashtags).
@@ -183,35 +165,37 @@ async def create_content(
     if body.hashtags is not None:
         hashtags_json = {"items": body.hashtags} if isinstance(body.hashtags, list) else body.hashtags
 
-    content = Content(
-        user_id=current_user.id,
-        content_type=body.content_type or "text",
-        original_text=body.original_text,
-        caption=body.caption,
-        summary=body.summary,
-        hashtags=hashtags_json,
-        file_path=body.file_path,
-        moderation_status=ModerationStatus.PENDING.value,
+    content = get_content_repo().create_content(
+        {
+            "user_id": current_user.id,
+            "record_type": "content",
+            "content_type": body.content_type or "text",
+            "original_text": body.original_text,
+            "caption": body.caption,
+            "summary": body.summary,
+            "hashtags": hashtags_json,
+            "file_path": body.file_path,
+            "moderation_status": "pending",
+            "status": "draft",
+            "created_at": datetime.utcnow().isoformat(),
+        }
     )
-    db.add(content)
-    await db.commit()
-    await db.refresh(content)
 
     return ContentItem(
-        id=content.id,
-        content_type=content.content_type,
-        original_text=content.original_text,
-        caption=content.caption,
-        summary=content.summary,
-        hashtags=content.hashtags,
-        translated_text=content.translated_text,
-        source_language=content.source_language,
-        target_language=content.target_language,
-        moderation_status=content.moderation_status,
-        safety_score=content.safety_score,
-        moderation_explanation=content.moderation_explanation,
+        id=content["content_id"],
+        content_type=content.get("content_type", "text"),
+        original_text=content.get("original_text"),
+        caption=content.get("caption"),
+        summary=content.get("summary"),
+        hashtags=content.get("hashtags"),
+        translated_text=content.get("translated_text"),
+        source_language=content.get("source_language"),
+        target_language=content.get("target_language"),
+        moderation_status=content.get("moderation_status", "pending"),
+        safety_score=content.get("safety_score"),
+        moderation_explanation=content.get("moderation_explanation"),
         workflow_status="draft",
         is_scheduled=False,
-        created_at=content.created_at.isoformat() if content.created_at else "",
-        updated_at=content.updated_at.isoformat() if content.updated_at else "",
+        created_at=content.get("created_at", ""),
+        updated_at=content.get("updated_at", ""),
     )

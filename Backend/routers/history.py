@@ -9,14 +9,9 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, union_all, func, desc
 
-from database import get_db
-from models.content import Content, ModerationStatus
-from models.schedule import ScheduledPost, ScheduleStatus
-from models.user import User
-from routers.auth import get_current_user
+from routers.auth import CurrentUser, get_current_user
+from services.dynamo_repositories import get_content_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,7 +19,7 @@ router = APIRouter()
 
 class HistoryItem(BaseModel):
     """Unified history item."""
-    id: int
+    id: str
     item_type: str  # 'content' or 'scheduled'
     title: str
     description: Optional[str] = None
@@ -60,8 +55,7 @@ async def get_user_history(
     time_range: Optional[str] = Query(None, description="Filter by time: 'today', 'week', 'month'"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Get user's activity history combining content and scheduled posts.
@@ -87,59 +81,60 @@ async def get_user_history(
         elif time_range == 'month':
             time_filter = now - timedelta(days=30)
     
+    repo = get_content_repo()
+    content_items = repo.list_for_user(current_user.id, record_type="content")
+    schedule_items = repo.list_for_user(current_user.id, record_type="scheduled")
+
     # Fetch content items
     if not item_type or item_type == 'content':
-        content_query = select(Content).where(Content.user_id == current_user.id)
-        if time_filter:
-            content_query = content_query.where(Content.created_at >= time_filter)
-        content_query = content_query.order_by(desc(Content.created_at))
-        
-        content_result = await db.execute(content_query)
-        contents = content_result.scalars().all()
-        
-        for c in contents:
+        for c in content_items:
+            created_at = c.get("created_at", "")
+            if time_filter and created_at and datetime.fromisoformat(created_at) < time_filter:
+                continue
             # Determine workflow status
             status = 'draft'
-            if c.moderation_status and c.moderation_status != ModerationStatus.PENDING.value:
+            if c.get("moderation_status") and c.get("moderation_status") != "pending":
                 status = 'moderated'
-            if c.translated_text:
+            if c.get("translated_text"):
                 status = 'translated'
             
-            title = c.caption or c.summary or (c.original_text[:50] + '...' if c.original_text and len(c.original_text) > 50 else c.original_text) or f"Content #{c.id}"
+            original = c.get("original_text")
+            title = (
+                c.get("caption")
+                or c.get("summary")
+                or (original[:50] + "..." if original and len(original) > 50 else original)
+                or f"Content #{c.get('content_id')}"
+            )
             
             items.append(HistoryItem(
-                id=c.id,
+                id=c["content_id"],
                 item_type='content',
-                title=title or f"Content #{c.id}",
-                description=c.original_text[:100] if c.original_text else None,
+                title=title or f"Content #{c.get('content_id')}",
+                description=original[:100] if original else None,
                 status=status,
                 platform=None,
-                safety_score=c.safety_score,
-                created_at=c.created_at.isoformat() if c.created_at else "",
-                updated_at=c.updated_at.isoformat() if c.updated_at else None,
+                safety_score=c.get("safety_score"),
+                created_at=created_at,
+                updated_at=c.get("updated_at"),
             ))
     
     # Fetch scheduled posts
     if not item_type or item_type == 'scheduled':
-        scheduled_query = select(ScheduledPost).where(ScheduledPost.user_id == current_user.id)
-        if time_filter:
-            scheduled_query = scheduled_query.where(ScheduledPost.created_at >= time_filter)
-        scheduled_query = scheduled_query.order_by(desc(ScheduledPost.created_at))
-        
-        scheduled_result = await db.execute(scheduled_query)
-        posts = scheduled_result.scalars().all()
-        
-        for p in posts:
+        for p in schedule_items:
+            created_at = p.get("created_at", "")
+            if time_filter and created_at and datetime.fromisoformat(created_at) < time_filter:
+                continue
+            description = p.get("description")
             items.append(HistoryItem(
-                id=p.id,
+                id=p["content_id"],
                 item_type='scheduled',
-                title=p.title,
-                description=p.description[:100] if p.description else None,
-                status=p.status,
-                platform=p.platform,
+                title=p.get("title", "Scheduled Item"),
+                description=description[:100] if description else None,
+                status=p.get("status", "queued"),
+                platform=p.get("platform"),
                 safety_score=None,
-                created_at=p.created_at.isoformat() if p.created_at else "",
-                updated_at=p.updated_at.isoformat() if p.updated_at else None,
+                created_at=created_at,
+                updated_at=p.get("updated_at"),
             ))
     
     # Sort all items by created_at descending
@@ -163,8 +158,7 @@ async def get_user_history(
 
 @router.get("/stats", response_model=HistoryStats)
 async def get_history_stats(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Get statistics for user's history.
@@ -173,53 +167,19 @@ async def get_history_stats(
     """
     week_ago = datetime.utcnow() - timedelta(days=7)
     
-    # Total content
-    total_content_result = await db.execute(
-        select(func.count(Content.id)).where(Content.user_id == current_user.id)
+    repo = get_content_repo()
+    content_items = repo.list_for_user(current_user.id, record_type="content")
+    schedule_items = repo.list_for_user(current_user.id, record_type="scheduled")
+    total_content = len(content_items)
+    total_scheduled = len(schedule_items)
+    published_count = sum(1 for p in schedule_items if p.get("status") == "published")
+    moderated_count = sum(1 for c in content_items if c.get("moderation_status") not in (None, "pending"))
+    this_week_content = sum(
+        1 for c in content_items if c.get("created_at") and datetime.fromisoformat(c["created_at"]) >= week_ago
     )
-    total_content = total_content_result.scalar() or 0
-    
-    # Total scheduled
-    total_scheduled_result = await db.execute(
-        select(func.count(ScheduledPost.id)).where(ScheduledPost.user_id == current_user.id)
+    this_week_scheduled = sum(
+        1 for p in schedule_items if p.get("created_at") and datetime.fromisoformat(p["created_at"]) >= week_ago
     )
-    total_scheduled = total_scheduled_result.scalar() or 0
-    
-    # Published count
-    published_result = await db.execute(
-        select(func.count(ScheduledPost.id)).where(
-            ScheduledPost.user_id == current_user.id,
-            ScheduledPost.status == ScheduleStatus.PUBLISHED.value,
-        )
-    )
-    published_count = published_result.scalar() or 0
-    
-    # Moderated count
-    moderated_result = await db.execute(
-        select(func.count(Content.id)).where(
-            Content.user_id == current_user.id,
-            Content.moderation_status != ModerationStatus.PENDING.value,
-        )
-    )
-    moderated_count = moderated_result.scalar() or 0
-    
-    # This week content
-    week_content_result = await db.execute(
-        select(func.count(Content.id)).where(
-            Content.user_id == current_user.id,
-            Content.created_at >= week_ago,
-        )
-    )
-    this_week_content = week_content_result.scalar() or 0
-    
-    # This week scheduled
-    week_scheduled_result = await db.execute(
-        select(func.count(ScheduledPost.id)).where(
-            ScheduledPost.user_id == current_user.id,
-            ScheduledPost.created_at >= week_ago,
-        )
-    )
-    this_week_scheduled = week_scheduled_result.scalar() or 0
     
     return HistoryStats(
         total_content=total_content,

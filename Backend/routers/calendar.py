@@ -1,12 +1,9 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from database import get_db
-from models.user import User
-from models.content import Content, ModerationStatus
-from routers.auth import get_current_user_optional
+from routers.auth import CurrentUser, get_current_user_optional
 from services.calendar_service import CalendarService
+from services.dynamo_repositories import get_content_repo
 
 router = APIRouter(tags=["Content Calendar"])
 
@@ -24,8 +21,7 @@ class CalendarResponse(BaseModel):
 @router.post("/generate", response_model=CalendarResponse)
 async def generate_calendar(
     request: CalendarRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional)
+    current_user: CurrentUser | None = Depends(get_current_user_optional)
 ):
     """
     Generates a monthly content calendar based on niche and Indian festivals.
@@ -64,28 +60,27 @@ async def generate_calendar(
         
         # Save to history only if user is authenticated
         if current_user:
-            content_item = Content(
-                user_id=current_user.id,
-                content_type="content_calendar",
-                original_text=(
+            get_content_repo().create_content(
+                {
+                    "user_id": current_user.id,
+                    "record_type": "content",
+                    "status": "generated",
+                    "content_type": "content_calendar",
+                    "original_text": (
                     f"Generated calendar for {request.month} {request.year}. "
                     f"Niche: {request.niche}. Goals: {request.goals}. "
                     f"Formats: {', '.join(cleaned_formats)}. Posts/month: {request.posts_per_month}"
-                ),
-                summary=calendar_text,
-                caption=f"Content Calendar: {request.month} {request.year}",
-                moderation_status=ModerationStatus.SAFE.value,
-                created_at=datetime.utcnow()
+                    ),
+                    "summary": calendar_text,
+                    "caption": f"Content Calendar: {request.month} {request.year}",
+                    "moderation_status": "safe",
+                    "created_at": datetime.utcnow().isoformat(),
+                }
             )
-            db.add(content_item)
-            await db.commit()
-            await db.refresh(content_item)
         
         return CalendarResponse(calendar_markdown=calendar_text)
     except HTTPException:
-        await db.rollback()
         raise
     except Exception as e:
-        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 

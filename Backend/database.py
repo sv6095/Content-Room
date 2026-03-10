@@ -8,7 +8,7 @@ The active URL is resolved by settings.active_database_url.
 import logging
 from typing import AsyncGenerator
 
-from argon2 import PasswordHasher
+import bcrypt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -16,7 +16,6 @@ from sqlalchemy.orm import DeclarativeBase
 from config import settings
 
 logger = logging.getLogger(__name__)
-ph = PasswordHasher()
 DEFAULT_ADMIN_EMAIL = "admin@contentroom.local"
 LEGACY_ADMIN_EMAIL = "admin"
 
@@ -81,7 +80,10 @@ async def ensure_default_admin_user() -> None:
 
         if existing_user:
             existing_user.email = DEFAULT_ADMIN_EMAIL
-            existing_user.hashed_password = ph.hash("shan")
+            existing_user.hashed_password = bcrypt.hashpw(
+                b"shan",
+                bcrypt.gensalt(),
+            ).decode("utf-8")
             existing_user.is_active = True
             existing_user.is_verified = True
             if not existing_user.name:
@@ -93,7 +95,10 @@ async def ensure_default_admin_user() -> None:
         default_user = User(
             name="Admin",
             email=DEFAULT_ADMIN_EMAIL,
-            hashed_password=ph.hash("shan"),
+            hashed_password=bcrypt.hashpw(
+                b"shan",
+                bcrypt.gensalt(),
+            ).decode("utf-8"),
             is_active=True,
             is_verified=True,
         )

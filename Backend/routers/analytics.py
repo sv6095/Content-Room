@@ -5,18 +5,13 @@ Handles performance metrics - AUTH OPTIONAL (uses authenticated user when availa
 """
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
 
-from database import get_db
-from models.content import Content, ModerationStatus
-from models.schedule import ScheduledPost, ScheduleStatus
-from models.user import User
-from routers.auth import get_current_user
+from routers.auth import CurrentUser, get_current_user
+from services.dynamo_repositories import get_content_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,72 +40,30 @@ class ModerationStats(BaseModel):
 @router.get("/dashboard", response_model=DashboardMetrics)
 async def get_dashboard_metrics(
     platform: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Get dashboard overview metrics.
     Uses authenticated user's ID.
     """
-    effective_user_id = current_user.id
     week_ago = datetime.utcnow() - timedelta(days=7)
-    
-    # Total content
-    total_result = await db.execute(
-        select(func.count(Content.id)).where(Content.user_id == effective_user_id)
+    repo = get_content_repo()
+    content_items = repo.list_for_user(current_user.id, record_type="content")
+    schedule_items = repo.list_for_user(current_user.id, record_type="scheduled")
+
+    total_content = len(content_items)
+    content_this_week = sum(
+        1
+        for c in content_items
+        if c.get("created_at") and datetime.fromisoformat(c["created_at"]) >= week_ago
     )
-    total_content = total_result.scalar() or 0
-    
-    # Content this week
-    week_result = await db.execute(
-        select(func.count(Content.id)).where(
-            Content.user_id == effective_user_id,
-            Content.created_at >= week_ago,
-        )
-    )
-    content_this_week = week_result.scalar() or 0
-    
-    # Moderation stats
-    safe_result = await db.execute(
-        select(func.count(Content.id)).where(
-            Content.user_id == effective_user_id,
-            Content.moderation_status == ModerationStatus.SAFE.value,
-        )
-    )
-    moderation_safe = safe_result.scalar() or 0
-    
-    flagged_result = await db.execute(
-        select(func.count(Content.id)).where(
-            Content.user_id == effective_user_id,
-            Content.moderation_status.in_([
-                ModerationStatus.WARNING.value,
-                ModerationStatus.UNSAFE.value,
-            ])
-        )
-    )
-    moderation_flagged = flagged_result.scalar() or 0
-    
-    # Scheduled posts
-    scheduled_query = select(func.count(ScheduledPost.id)).where(
-            ScheduledPost.user_id == effective_user_id,
-            ScheduledPost.status == ScheduleStatus.QUEUED.value,
-        )
+    moderation_safe = sum(1 for c in content_items if c.get("moderation_status") == "safe")
+    moderation_flagged = sum(1 for c in content_items if c.get("moderation_status") in {"warning", "unsafe"})
+
     if platform:
-        scheduled_query = scheduled_query.where(ScheduledPost.platform == platform)
-    
-    scheduled_result = await db.execute(scheduled_query)
-    scheduled_posts = scheduled_result.scalar() or 0
-    
-    # Published posts
-    published_query = select(func.count(ScheduledPost.id)).where(
-            ScheduledPost.user_id == effective_user_id,
-            ScheduledPost.status == ScheduleStatus.PUBLISHED.value,
-        )
-    if platform:
-         published_query = published_query.where(ScheduledPost.platform == platform)
-    
-    published_result = await db.execute(published_query)
-    published_posts = published_result.scalar() or 0
+        schedule_items = [s for s in schedule_items if s.get("platform") == platform]
+    scheduled_posts = sum(1 for s in schedule_items if s.get("status") == "queued")
+    published_posts = sum(1 for s in schedule_items if s.get("status") == "published")
     
     return DashboardMetrics(
         total_content=total_content,
@@ -125,43 +78,33 @@ async def get_dashboard_metrics(
 @router.get("/moderation", response_model=ModerationStats)
 async def get_moderation_stats(
     platform: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Get moderation statistics.
     Uses authenticated user's ID.
     """
-    effective_user_id = current_user.id
-    
-    # Count by status
-    status_counts = {}
-    for status in ModerationStatus:
-        result = await db.execute(
-            select(func.count(Content.id)).where(
-                Content.user_id == effective_user_id,
-                Content.moderation_status == status.value,
-            )
-        )
-        status_counts[status.value] = result.scalar() or 0
-    
-    # Average safety score
-    avg_result = await db.execute(
-        select(func.avg(Content.safety_score)).where(
-            Content.user_id == effective_user_id,
-            Content.safety_score.isnot(None),
-        )
-    )
-    avg_score = avg_result.scalar() or 0.0
+    content_items = get_content_repo().list_for_user(current_user.id, record_type="content")
+    if platform:
+        content_items = [c for c in content_items if c.get("platform") == platform]
+    status_counts = {
+        "safe": sum(1 for c in content_items if c.get("moderation_status") == "safe"),
+        "warning": sum(1 for c in content_items if c.get("moderation_status") == "warning"),
+        "unsafe": sum(1 for c in content_items if c.get("moderation_status") == "unsafe"),
+        "escalated": sum(1 for c in content_items if c.get("moderation_status") == "escalated"),
+        "pending": sum(1 for c in content_items if c.get("moderation_status") in (None, "pending")),
+    }
+    scores = [float(c["safety_score"]) for c in content_items if c.get("safety_score") is not None]
+    avg_score = (sum(scores) / len(scores)) if scores else 0.0
     
     total = sum(status_counts.values())
     
     return ModerationStats(
         total_moderated=total,
-        safe_count=status_counts.get(ModerationStatus.SAFE.value, 0),
-        warning_count=status_counts.get(ModerationStatus.WARNING.value, 0),
-        unsafe_count=status_counts.get(ModerationStatus.UNSAFE.value, 0),
-        escalated_count=status_counts.get(ModerationStatus.ESCALATED.value, 0),
+        safe_count=status_counts.get("safe", 0),
+        warning_count=status_counts.get("warning", 0),
+        unsafe_count=status_counts.get("unsafe", 0),
+        escalated_count=status_counts.get("escalated", 0),
         average_safety_score=round(avg_score, 2),
     )
 
@@ -182,10 +125,31 @@ async def get_provider_stats():
             "translation": settings.translation_provider,
         },
         "aws_configured": settings.aws_configured,
+        "scheduler_mode": "infra_eventbridge_rule_plus_local_calendar",
+        "scheduler_runtime_client_initialized": False,
+        "aws_service_alignment_doc": "/Backend/AWS_SERVICE_ALIGNMENT.md",
         "fallback_chain": {
             "llm": ["aws_bedrock", "grok", "openrouter", "ollama"],
-            "vision": ["aws_rekognition", "opencv"],
+            "vision": ["aws_rekognition", "simple_fallback"],
             "speech": ["aws_transcribe", "whisper"],
             "translation": ["aws_translate", "google_free"],
-        }
+        },
+        "services_initialized_in_code": [
+            "bedrock-runtime",
+            "rekognition",
+            "comprehend",
+            "translate",
+            "transcribe",
+            "dynamodb",
+            "s3",
+            "stepfunctions",
+        ],
+        "services_infra_managed": [
+            "apigateway",
+            "lambda",
+            "eventbridge",
+            "cloudwatch",
+            "xray",
+            "cloudfront",
+        ],
     }

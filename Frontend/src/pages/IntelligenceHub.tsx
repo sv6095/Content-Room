@@ -79,13 +79,18 @@ function CultureTab() {
     setLoading(true); setError(""); setResult(null);
     try {
       const lang = language === "Auto (Region Default)" ? undefined : language;
-      setResult(await intelligenceAPI.cultureRewrite(
+      const response = await intelligenceAPI.cultureRewrite(
         content,
         region.trim() || "general",
         festival.trim() || undefined,
         niche.trim() || undefined,
         lang,
-      ));
+      );
+      if (!response.rewritten || !response.rewritten.trim()) {
+        setError("No adapted content was returned. Please retry with more detailed original content.");
+        return;
+      }
+      setResult(response);
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Request failed."); }
     finally { setLoading(false); }
   };

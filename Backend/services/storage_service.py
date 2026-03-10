@@ -92,8 +92,6 @@ class S3StorageProvider(BaseStorageProvider):
                 self.client = boto3.client(
                     's3',
                     region_name=settings.aws_region,
-                    aws_access_key_id=settings.aws_access_key_id,
-                    aws_secret_access_key=settings.aws_secret_access_key,
                 )
                 logger.info(f"AWS S3 initialized with bucket: {self.bucket_name}")
             except Exception as e:
@@ -167,6 +165,25 @@ class S3StorageProvider(BaseStorageProvider):
         except Exception as e:
             logger.error(f"S3 URL generation error: {e}")
             raise StorageError(f"Failed to generate URL: {e}")
+
+    async def create_presigned_upload_url(
+        self,
+        filename: str,
+        content_type: str,
+        folder: str = "uploads",
+        expires_in: int = 900,
+    ) -> Dict[str, Any]:
+        if not self.is_available():
+            raise StorageError("S3 not configured")
+        ext = Path(filename).suffix
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+        key = f"{folder}/{datetime.now().strftime('%Y/%m/%d')}/{unique_name}"
+        url = self.client.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": self.bucket_name, "Key": key, "ContentType": content_type},
+            ExpiresIn=expires_in,
+        )
+        return {"upload_url": url, "key": key, "provider": "s3"}
 
 
 # ============================================
@@ -355,11 +372,15 @@ class StorageService:
     """
     
     def __init__(self):
-        self.providers = [
-            ("s3", S3StorageProvider()),
-            ("firebase", FirebaseStorageProvider()),
-            ("local", LocalStorageProvider()),
-        ]
+        s3_provider = ("s3", S3StorageProvider())
+        if settings.media_private_only:
+            self.providers = [s3_provider]
+        else:
+            self.providers = [
+                s3_provider,
+                ("firebase", FirebaseStorageProvider()),
+                ("local", LocalStorageProvider()),
+            ]
     
     def get_available_provider(self) -> tuple:
         """Get the first available provider."""
@@ -437,6 +458,23 @@ class StorageService:
     def get_status(self) -> Dict[str, bool]:
         """Get availability status of all providers."""
         return {name: provider.is_available() for name, provider in self.providers}
+
+    async def create_presigned_upload_url(
+        self,
+        filename: str,
+        content_type: str,
+        folder: str = "uploads",
+        expires_in: int = 900,
+    ) -> Dict[str, Any]:
+        for name, provider in self.providers:
+            if name == "s3" and provider.is_available():
+                return await provider.create_presigned_upload_url(
+                    filename=filename,
+                    content_type=content_type,
+                    folder=folder,
+                    expires_in=expires_in,
+                )
+        raise StorageError("S3 provider is required for presigned uploads")
 
 
 # ============================================

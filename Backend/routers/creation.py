@@ -198,37 +198,10 @@ async def extract_and_generate(
         
         # Extract from video (use first frame for now)
         if video:
-            import tempfile
-            import os
-            video_bytes = await video.read()
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video.filename or ".mp4")[1]) as tmp:
-                tmp.write(video_bytes)
-                tmp_path = tmp.name
-            
-            try:
-                import cv2
-                cap = cv2.VideoCapture(tmp_path)
-                if cap.isOpened():
-                    ret, frame = cap.read()
-                    if ret:
-                        # Encode frame to bytes and analyze
-                        _, buffer = cv2.imencode('.jpg', frame)
-                        frame_bytes = buffer.tobytes()
-                        
-                        frame_analysis = await vision.analyze(frame_bytes)
-                        labels = frame_analysis.get("content_labels", [])
-                        if labels:
-                            label_text = ", ".join([
-                                l.get("name", l) if isinstance(l, dict) else str(l)
-                                for l in labels[:10]
-                            ])
-                            extracted_content += f"Video content: {label_text}. "
-                            providers.append(frame_analysis.get("provider", "vision"))
-                    cap.release()
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+            raise HTTPException(
+                status_code=501,
+                detail="Video extraction is currently unavailable",
+            )
         
         if not extracted_content:
             raise HTTPException(

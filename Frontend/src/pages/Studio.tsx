@@ -178,6 +178,10 @@ export default function Studio() {
       setError('Please upload a media file first');
       return;
     }
+    if (selectedType === 'video') {
+      setError('Video extraction is currently unavailable.');
+      return;
+    }
 
     setIsProcessing(true);
     setProcessingType('media-analysis');
@@ -186,19 +190,8 @@ export default function Studio() {
     setGeneratedContent(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', uploadedFile);
-      
-      const response = await fetch('/api/v1/create/extract-and-generate', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server error: ${response.statusText}`);
-      }
-
-      const data = await response.json();
+      const mediaType = selectedType as 'image' | 'audio' | 'video';
+      const data = await creationAPI.extractAndGenerate(uploadedFile, mediaType);
       
       // Set extracted content
       setExtractedContent(data.extracted_content || 'Media analyzed successfully');

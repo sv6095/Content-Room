@@ -10,17 +10,15 @@ Handles multimodal content moderation - NO AUTH REQUIRED.
 Now saves results to database for analytics tracking.
 """
 import logging
+import hashlib
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.moderation_service import get_moderation_service
-from database import get_db
-from models.content import Content, ModerationStatus
-from models.user import User
-from routers.auth import get_current_user_optional
+from routers.auth import CurrentUser, get_current_user_optional
+from services.dynamo_repositories import get_content_repo, get_moderation_cache_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,17 +46,16 @@ class ModerationResponse(BaseModel):
 def get_moderation_status(decision: str) -> str:
     """Convert moderation decision to ModerationStatus enum value."""
     if decision == "ESCALATE":
-        return ModerationStatus.ESCALATED.value
+        return "escalated"
     elif decision == "FLAG":
-        return ModerationStatus.UNSAFE.value
-    return ModerationStatus.SAFE.value
+        return "unsafe"
+    return "safe"
 
 
 @router.post("/text", response_model=ModerationResponse)
 async def moderate_text(
     request: TextModerationRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Moderate text content for safety.
@@ -67,24 +64,32 @@ async def moderate_text(
     Saves results to database for analytics.
     """
     try:
-        result = await moderation.moderate_text(request.text)
+        cache_repo = get_moderation_cache_repo()
+        text_hash = hashlib.sha256(request.text.encode("utf-8")).hexdigest()
+        cached = cache_repo.get(text_hash)
+        result = cached.get("result") if cached and cached.get("result") else None
+        if not result:
+            result = await moderation.moderate_text(request.text)
+            cache_repo.put(text_hash, {"result": result, "flagged": result["decision"] != "ALLOW"})
         
         # Save to database for analytics (uses authenticated user if available)
         if request.save_to_db:
             try:
-                content = Content(
-                    user_id=current_user.id if current_user else 1,
-                    content_type="text",
-                    original_text=request.text[:500],  # Truncate for storage
-                    moderation_status=get_moderation_status(result["decision"]),
-                    safety_score=result.get("safety_score", 100),  # Keep for analytics
-                    moderation_flags=result.get("flags", []),
+                get_content_repo().create_content(
+                    {
+                        "user_id": current_user.id if current_user else "anonymous",
+                        "record_type": "content",
+                        "status": "moderated",
+                        "content_type": "text",
+                        "original_text": request.text[:500],
+                        "moderation_status": get_moderation_status(result["decision"]),
+                        "safety_score": result.get("safety_score", 100),
+                        "moderation_flags": result.get("flags", []),
+                        "moderation_explanation": result.get("explanation"),
+                    }
                 )
-                db.add(content)
-                await db.commit()
             except Exception as db_error:
                 logger.warning(f"Failed to save moderation to DB: {db_error}")
-                await db.rollback()
         
         return ModerationResponse(
             decision=result["decision"],
@@ -102,8 +107,7 @@ async def moderate_text(
 @router.post("/image")
 async def moderate_image(
     image: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Moderate image content for safety.
@@ -113,23 +117,30 @@ async def moderate_image(
     """
     try:
         image_bytes = await image.read()
-        result = await moderation.moderate_image(image_bytes)
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
+        cache_repo = get_moderation_cache_repo()
+        cached = cache_repo.get(image_hash)
+        result = cached.get("result") if cached and cached.get("result") else None
+        if not result:
+            result = await moderation.moderate_image(image_bytes)
+            cache_repo.put(image_hash, {"result": result, "flagged": result["decision"] != "ALLOW"})
         
         # Save to database for analytics
         try:
-            content = Content(
-                user_id=current_user.id if current_user else 1,
-                content_type="image",
-                original_text=f"Image: {image.filename}",
-                moderation_status=get_moderation_status(result["decision"]),
-                safety_score=result.get("safety_score", 100),
-                moderation_flags=result.get("flags", []),
+            get_content_repo().create_content(
+                {
+                    "user_id": current_user.id if current_user else "anonymous",
+                    "record_type": "content",
+                    "status": "moderated",
+                    "content_type": "image",
+                    "original_text": f"Image: {image.filename}",
+                    "moderation_status": get_moderation_status(result["decision"]),
+                    "safety_score": result.get("safety_score", 100),
+                    "moderation_flags": result.get("flags", []),
+                }
             )
-            db.add(content)
-            await db.commit()
         except Exception as db_error:
             logger.warning(f"Failed to save moderation to DB: {db_error}")
-            await db.rollback()
         
         return {
             "filename": image.filename,
@@ -143,8 +154,7 @@ async def moderate_image(
 @router.post("/audio")
 async def moderate_audio(
     audio: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Moderate audio content for safety.
@@ -158,19 +168,20 @@ async def moderate_audio(
         
         # Save to database for analytics
         try:
-            content = Content(
-                user_id=current_user.id if current_user else 1,
-                content_type="audio",
-                original_text=f"Audio: {audio.filename}",
-                moderation_status=get_moderation_status(result["decision"]),
-                safety_score=result.get("safety_score", 100),
-                moderation_flags=result.get("flags", []),
+            get_content_repo().create_content(
+                {
+                    "user_id": current_user.id if current_user else "anonymous",
+                    "record_type": "content",
+                    "status": "moderated",
+                    "content_type": "audio",
+                    "original_text": f"Audio: {audio.filename}",
+                    "moderation_status": get_moderation_status(result["decision"]),
+                    "safety_score": result.get("safety_score", 100),
+                    "moderation_flags": result.get("flags", []),
+                }
             )
-            db.add(content)
-            await db.commit()
         except Exception as db_error:
             logger.warning(f"Failed to save moderation to DB: {db_error}")
-            await db.rollback()
         
         return {
             "filename": audio.filename,
@@ -184,123 +195,17 @@ async def moderate_audio(
 @router.post("/video")
 async def moderate_video(
     video: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_user_optional),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Moderate video content for safety.
     Extracts frames and analyzes them for moderation.
     NO AUTHENTICATION REQUIRED.
     """
-    import tempfile
-    import os
-    
-    try:
-        video_bytes = await video.read()
-        
-        # Save to temp file for processing
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video.filename or ".mp4")[1]) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
-        
-        try:
-            import cv2
-            import numpy as np
-            
-            cap = cv2.VideoCapture(tmp_path)
-            if not cap.isOpened():
-                raise HTTPException(status_code=400, detail="Could not open video file")
-            
-            # Get video properties
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            duration = total_frames / fps if fps > 0 else 0
-            
-            # Extract frames at regular intervals (max 5 frames)
-            frame_indices = []
-            if total_frames <= 5:
-                frame_indices = list(range(total_frames))
-            else:
-                step = total_frames // 5
-                frame_indices = [i * step for i in range(5)]
-            
-            frame_results = []
-            min_safety = 100
-            all_flags = []
-            
-            for idx in frame_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                ret, frame = cap.read()
-                if ret:
-                    # Encode frame to bytes
-                    _, buffer = cv2.imencode('.jpg', frame)
-                    frame_bytes = buffer.tobytes()
-                    
-                    # Analyze frame
-                    frame_result = await moderation.moderate_image(frame_bytes)
-                    frame_results.append({
-                        "frame_index": idx,
-                        "timestamp": idx / fps if fps > 0 else 0,
-                        "safety_score": frame_result["safety_score"],
-                        "flags": frame_result.get("flags", []),
-                    })
-                    min_safety = min(min_safety, frame_result["safety_score"])
-                    all_flags.extend(frame_result.get("flags", []))
-            
-            cap.release()
-            
-            # Combined decision
-            if min_safety >= 70:
-                decision = "ALLOW"
-            elif min_safety >= 40:
-                decision = "FLAG"
-            else:
-                decision = "ESCALATE"
-            
-            result = {
-                "decision": decision,
-                "safety_score": min_safety,
-                "flags": list(set(all_flags)),
-                "video_info": {
-                    "duration_seconds": round(duration, 2),
-                    "total_frames": total_frames,
-                    "frames_analyzed": len(frame_results),
-                },
-                "frame_results": frame_results,
-                "provider": "opencv_video",
-            }
-            
-            # Save to database for analytics
-            try:
-                content = Content(
-                    user_id=current_user.id if current_user else 1,
-                    content_type="video",
-                    original_text=f"Video: {video.filename}",
-                    moderation_status=get_moderation_status(decision),
-                    safety_score=min_safety,
-                    moderation_flags=list(set(all_flags)),
-                )
-                db.add(content)
-                await db.commit()
-            except Exception as db_error:
-                logger.warning(f"Failed to save moderation to DB: {db_error}")
-                await db.rollback()
-            
-            return {
-                "filename": video.filename,
-                **result,
-            }
-            
-        finally:
-            # Cleanup temp file
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Video moderation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(
+        status_code=501,
+        detail="Video moderation is currently unavailable",
+    )
 
 
 @router.post("/multimodal")

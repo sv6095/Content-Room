@@ -8,18 +8,14 @@ import logging
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
 from pathlib import Path
 import shutil
 import uuid
 
 from config import get_settings
-
-from database import get_db
-from models.schedule import ScheduledPost, ScheduleStatus
+from services.dynamo_repositories import get_content_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,13 +26,13 @@ class ScheduleRequest(BaseModel):
     title: str
     description: Optional[str] = None
     scheduled_at: datetime
-    user_id: int = 1
-    content_id: Optional[int] = None  # Optionally link to a piece of content
+    user_id: str = "1"
+    content_id: Optional[str] = None  # Optionally link to a piece of content
 
 
 class ScheduleResponse(BaseModel):
     """A scheduled calendar item."""
-    id: int
+    id: str
     title: str
     description: Optional[str]
     scheduled_at: datetime
@@ -53,28 +49,40 @@ class ScheduleResponse(BaseModel):
 @router.post("/", response_model=ScheduleResponse)
 async def schedule_post(
     request: ScheduleRequest,
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Add an item to the content schedule calendar.
     No social media publishing — this is a personal content planner.
     """
-    post = ScheduledPost(
-        user_id=request.user_id,
-        content_id=request.content_id,
-        title=request.title,
-        description=request.description,
-        scheduled_at=request.scheduled_at,
-        platform=None,  # not used
-        status=ScheduleStatus.QUEUED.value,
+    now = datetime.utcnow().isoformat()
+    post = get_content_repo().create_content(
+        {
+            "user_id": str(request.user_id),
+            "record_type": "scheduled",
+            "content_type": "scheduled_task",
+            "content_id": request.content_id,
+            "title": request.title,
+            "description": request.description,
+            "scheduled_at": request.scheduled_at.isoformat(),
+            "platform": None,
+            "status": "queued",
+            "ai_optimized": False,
+            "created_at": now,
+            "updated_at": now,
+        }
     )
-
-    db.add(post)
-    await db.commit()
-    await db.refresh(post)
-
-    logger.info(f"Schedule item created: {post.id} — '{post.title}' at {post.scheduled_at}")
-    return ScheduleResponse.model_validate(post)
+    logger.info(f"Schedule item created: {post['content_id']} — '{post['title']}' at {post['scheduled_at']}")
+    return ScheduleResponse(
+        id=post["content_id"],
+        title=post["title"],
+        description=post.get("description"),
+        scheduled_at=datetime.fromisoformat(post["scheduled_at"]),
+        status=post.get("status", "queued"),
+        platform=post.get("platform"),
+        media_url=post.get("media_url"),
+        ai_optimized=bool(post.get("ai_optimized", False)),
+        created_at=datetime.fromisoformat(post["created_at"]),
+    )
 
 @router.post("/with-media")
 async def schedule_post_with_media(
@@ -83,7 +91,6 @@ async def schedule_post_with_media(
     file: UploadFile = File(...),
     description: Optional[str] = Form(None),
     platform: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Schedule a post with an attached media file (image, video, document).
@@ -107,24 +114,37 @@ async def schedule_post_with_media(
     
     media_url = f"{settings.storage_base_url}/{safe_filename}"
     
-    post = ScheduledPost(
-        user_id=1,
-        title=title,
-        description=description,
-        scheduled_at=scheduled_at,
-        platform=platform,
-        status=ScheduleStatus.QUEUED.value,
-        media_url=media_url
+    now = datetime.utcnow().isoformat()
+    post = get_content_repo().create_content(
+        {
+            "user_id": "1",
+            "record_type": "scheduled",
+            "content_type": "scheduled_task",
+            "title": title,
+            "description": description,
+            "scheduled_at": scheduled_at.isoformat(),
+            "platform": platform,
+            "status": "queued",
+            "media_url": media_url,
+            "ai_optimized": False,
+            "created_at": now,
+            "updated_at": now,
+        }
     )
-
-    db.add(post)
-    await db.commit()
-    await db.refresh(post)
-
-    logger.info(f"Schedule media item created: {post.id} — '{post.title}' at {post.scheduled_at}")
+    logger.info(f"Schedule media item created: {post['content_id']} — '{post['title']}' at {post['scheduled_at']}")
     
     return {
-        "post": ScheduleResponse.model_validate(post),
+        "post": ScheduleResponse(
+            id=post["content_id"],
+            title=post["title"],
+            description=post.get("description"),
+            scheduled_at=datetime.fromisoformat(post["scheduled_at"]),
+            status=post.get("status", "queued"),
+            platform=post.get("platform"),
+            media_url=post.get("media_url"),
+            ai_optimized=bool(post.get("ai_optimized", False)),
+            created_at=datetime.fromisoformat(post["created_at"]),
+        ),
         "media": {"url": media_url, "filename": safe_filename},
         "moderation_passed": True
     }
@@ -133,58 +153,63 @@ async def schedule_post_with_media(
 
 @router.get("/", response_model=List[ScheduleResponse])
 async def list_scheduled_posts(
-    user_id: int = 1,
-    db: AsyncSession = Depends(get_db),
+    user_id: str = "1",
 ):
     """
     List all active calendar items for the user (excludes cancelled/deleted entries).
     """
-    query = (
-        select(ScheduledPost)
-        .where(
-            ScheduledPost.user_id == user_id,
-            ScheduledPost.status != ScheduleStatus.CANCELLED.value,
+    posts = get_content_repo().list_for_user(str(user_id), record_type="scheduled")
+    posts = [p for p in posts if p.get("status") != "cancelled"]
+    posts.sort(key=lambda p: p.get("scheduled_at", ""))
+    return [
+        ScheduleResponse(
+            id=p["content_id"],
+            title=p.get("title", ""),
+            description=p.get("description"),
+            scheduled_at=datetime.fromisoformat(p["scheduled_at"]),
+            status=p.get("status", "queued"),
+            platform=p.get("platform"),
+            media_url=p.get("media_url"),
+            ai_optimized=bool(p.get("ai_optimized", False)),
+            created_at=datetime.fromisoformat(p["created_at"]),
         )
-        .order_by(ScheduledPost.scheduled_at)
-    )
-    result = await db.execute(query)
-    posts = result.scalars().all()
-    return [ScheduleResponse.model_validate(p) for p in posts]
+        for p in posts
+    ]
 
 
 @router.get("/{post_id}", response_model=ScheduleResponse)
 async def get_scheduled_post(
-    post_id: int,
-    db: AsyncSession = Depends(get_db),
+    post_id: str,
 ):
     """Get a specific scheduled calendar item."""
-    result = await db.execute(
-        select(ScheduledPost).where(ScheduledPost.id == post_id)
-    )
-    post = result.scalar_one_or_none()
-    if not post:
+    post = get_content_repo().get_content(post_id)
+    if not post or post.get("record_type") != "scheduled":
         raise HTTPException(status_code=404, detail="Item not found")
-    return ScheduleResponse.model_validate(post)
+    return ScheduleResponse(
+        id=post["content_id"],
+        title=post.get("title", ""),
+        description=post.get("description"),
+        scheduled_at=datetime.fromisoformat(post["scheduled_at"]),
+        status=post.get("status", "queued"),
+        platform=post.get("platform"),
+        media_url=post.get("media_url"),
+        ai_optimized=bool(post.get("ai_optimized", False)),
+        created_at=datetime.fromisoformat(post["created_at"]),
+    )
 
 
 @router.delete("/{post_id}")
 async def delete_scheduled_post(
-    post_id: int,
-    db: AsyncSession = Depends(get_db),
+    post_id: str,
 ):
     """
     Permanently delete a scheduled calendar item.
     The item is removed from the database entirely so it no longer appears on the calendar.
     """
-    result = await db.execute(
-        select(ScheduledPost).where(ScheduledPost.id == post_id)
-    )
-    post = result.scalar_one_or_none()
-    if not post:
+    post = get_content_repo().get_content(post_id)
+    if not post or post.get("record_type") != "scheduled":
         raise HTTPException(status_code=404, detail="Item not found")
-
-    await db.execute(delete(ScheduledPost).where(ScheduledPost.id == post_id))
-    await db.commit()
+    get_content_repo().delete_content(post_id)
 
     logger.info(f"Schedule item deleted: {post_id}")
     return {"message": "Item removed from schedule"}

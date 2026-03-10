@@ -1,13 +1,15 @@
 /**
  * Content Room API Client
  *
- * All requests use relative paths (/api/v1/...) so the backend origin
- * is never exposed in the browser's Network DevTools panel.
+ * All API requests must use VITE_API_BASE_URL so frontend calls do not
+ * accidentally resolve against static hosting origins (for example S3 website).
  */
 
-// Relative path — Vite proxy (dev) or reverse-proxy (prod) routes this
-// to the backend. No raw backend URL is visible in the browser.
-const API_V1 = '/api/v1';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+if (!API_BASE_URL) {
+  throw new Error('VITE_API_BASE_URL is not set. Configure it in Frontend/.env before building.');
+}
+const API_V1 = `${API_BASE_URL}/api/v1`;
 
 // ============================================
 // Types & Interfaces
@@ -396,6 +398,22 @@ export const creationAPI = {
     formData.append('tone', tone);
 
     const response = await fetch(`${API_V1}/create/rewrite`, {
+      method: 'POST',
+      body: formData,
+    });
+    return handleResponse(response);
+  },
+
+  async extractAndGenerate(file: File, mediaType: 'image' | 'audio' | 'video'): Promise<{
+    extracted_content: string;
+    caption?: string;
+    summary?: string;
+    hashtags?: string[];
+    provider: string;
+  }> {
+    const formData = new FormData();
+    formData.append(mediaType, file);
+    const response = await fetch(`${API_V1}/create/extract-and-generate`, {
       method: 'POST',
       body: formData,
     });

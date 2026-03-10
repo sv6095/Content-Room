@@ -2,7 +2,7 @@
 User Model for ContentOS
 
 Handles user authentication and profile data.
-Uses Argon2 for password hashing (PHC winner).
+Uses bcrypt for password hashing.
 """
 from datetime import datetime
 from typing import Optional
@@ -21,7 +21,7 @@ class User(Base):
         id: Primary key
         email: Unique email address
         name: Display name
-        hashed_password: Argon2-hashed password
+        hashed_password: bcrypt-hashed password
         is_active: Account status
         is_verified: Email verification status
         preferred_language: User's preferred language code

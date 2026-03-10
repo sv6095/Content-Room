@@ -22,6 +22,7 @@ import { ALLOWED_LANGUAGE_OPTIONS } from '@/constants/languages';
 
 // ─── Supported language list ───────────────────────────────
 const LANGUAGES = [...ALLOWED_LANGUAGE_OPTIONS];
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 const PLATFORMS = ["instagram", "facebook", "twitter", "youtube", "linkedin"];
 
@@ -629,7 +630,7 @@ export default function Scheduler() {
                           {post.media_url && (
                             <div className="flex items-center gap-1 ml-3 text-primary">
                               <Paperclip className="h-3 w-3" />
-                              <a href={`http://localhost:8000${post.media_url}`} target="_blank" rel="noreferrer" className="hover:underline">
+                              <a href={`${API_BASE}${post.media_url}`} target="_blank" rel="noreferrer" className="hover:underline">
                                 Attachment
                               </a>
                             </div>

@@ -1,9 +1,9 @@
 """
 Translation Service for ContentOS
 
-AWS Translate-first with free fallback:
+AWS Translate-first service:
 1. AWS Translate - PRIMARY for hackathon
-2. deep-translator (Google Translate wrapper) - FREE fallback
+2. deep-translator fallback
 
 Supports 9 Indian languages + English:
 - Telugu (te), Tamil (ta), Hindi (hi), Bangla (bn)
@@ -15,8 +15,6 @@ Also handles TRANSLITERATED text (Indian languages in English script).
 import logging
 from typing import Optional, Dict, Any, List
 from enum import Enum
-
-from langdetect import detect, LangDetectException
 
 from config import settings
 
@@ -89,8 +87,6 @@ class TranslationService:
                 self.aws_client = boto3.client(
                     'translate',
                     region_name=settings.aws_region,
-                    aws_access_key_id=settings.aws_access_key_id,
-                    aws_secret_access_key=settings.aws_secret_access_key,
                 )
                 logger.info("AWS Translate initialized")
             except Exception as e:
@@ -122,15 +118,7 @@ class TranslationService:
                 logger.info(f"Detected transliterated {lang_code} (matched {matches} words)")
                 return lang_code
         
-        # Fall back to standard detection
-        try:
-            detected = detect(text)
-            # Map to our supported languages
-            if detected in [lang.value for lang in SupportedLanguage]:
-                return detected
-            return "en"  # Default to English
-        except LangDetectException:
-            return "en"
+        return "en"
     
     def detect_transliteration(self, text: str) -> Optional[str]:
         """

@@ -2,12 +2,9 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Any
-from sqlalchemy.ext.asyncio import AsyncSession
-from database import get_db
-from models.user import User
-from models.content import Content, ContentType, ModerationStatus
-from routers.auth import get_current_user_optional
+from routers.auth import CurrentUser, get_current_user_optional
 from services.competitor_service import CompetitorService
+from services.dynamo_repositories import get_content_repo
 
 router = APIRouter(tags=["Competitor"])
 
@@ -24,8 +21,7 @@ class CompetitorResponse(BaseModel):
 @router.post("/analyze", response_model=CompetitorResponse)
 async def analyze_competitor_gaps(
     request: CompetitorRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional)
+    current_user: CurrentUser | None = Depends(get_current_user_optional)
 ):
     """
     Analyzes a given competitor's URL (social profile, blog) and returns a gap analysis.
@@ -39,18 +35,19 @@ async def analyze_competitor_gaps(
         
         # Save to history only if user is authenticated
         if current_user:
-            content_item = Content(
-                user_id=current_user.id,
-                content_type="competitor_analysis",
-                original_text=f"Analyzed competitor: {request.url} in niche: {request.niche}",
-                summary=analysis_result,
-                caption=f"Competitor Analysis: {request.url}",
-                moderation_status=ModerationStatus.SAFE.value, # Analysis is safe by default
-                created_at=datetime.utcnow()
+            get_content_repo().create_content(
+                {
+                    "user_id": current_user.id,
+                    "record_type": "content",
+                    "status": "generated",
+                    "content_type": "competitor_analysis",
+                    "original_text": f"Analyzed competitor: {request.url} in niche: {request.niche}",
+                    "summary": analysis_result,
+                    "caption": f"Competitor Analysis: {request.url}",
+                    "moderation_status": "safe",
+                    "created_at": datetime.utcnow().isoformat(),
+                }
             )
-            db.add(content_item)
-            await db.commit()
-            await db.refresh(content_item)
         
         return CompetitorResponse(
             analysis=analysis_result,
@@ -59,6 +56,5 @@ async def analyze_competitor_gaps(
             analysis_structured=analysis_payload.get("analysis_structured"),
         )
     except Exception as e:
-        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 

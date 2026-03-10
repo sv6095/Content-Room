@@ -69,6 +69,25 @@ FESTIVAL_TONES = {
 }
 
 
+def _looks_like_generic_fallback(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return True
+    return normalized.startswith("generated response for:")
+
+
+def _rule_based_rewrite(content: str, persona: dict, festival: Optional[str]) -> str:
+    """Deterministic rewrite fallback when LLM returns empty/generic content."""
+    hook = persona.get("hooks", ["community"])[0]
+    tone = persona.get("tone", "community-first")
+    festival_phrase = f" As we celebrate {festival.title()}, " if festival else " "
+    base = content.strip() or "We are excited to share this with you."
+    return (
+        f"{festival_phrase}we are speaking to a {tone} audience with a focus on {hook}. "
+        f"{base}"
+    ).strip()
+
+
 
 # ─── Rule-Based Regional Alignment Scorer ────────────────────────────────────
 
@@ -190,9 +209,12 @@ Rewritten Content:"""
 
     llm = get_llm_service()
     result = await llm.generate(prompt, task="culture_emotion_engine", max_tokens=512)
+    rewritten_text = result.get("text", "")
+    if _looks_like_generic_fallback(rewritten_text):
+        rewritten_text = _rule_based_rewrite(content, persona, festival)
 
     # ── Rule-Based Alignment Check (RL layer) ──────────────────────────────
-    rule_data = _rule_alignment_score(result["text"], persona, festival)
+    rule_data = _rule_alignment_score(rewritten_text, persona, festival)
 
     # ── Weighted Score Combination ──────────────────────────────────────────
     # LLM weight: 60% — semantic creativity and cultural nuance
@@ -201,13 +223,13 @@ Rewritten Content:"""
     RULE_WEIGHT = 0.40
 
     # LLM baseline score: assume 75 if generation succeeded (no explicit score from LLM)
-    llm_baseline = 75 if result["text"] else 0
+    llm_baseline = 75 if rewritten_text else 0
     rule_score   = rule_data["rule_alignment_score"]
     final_alignment_score = int(llm_baseline * LLM_WEIGHT + rule_score * RULE_WEIGHT)
 
     return {
         "original":              content,
-        "rewritten":             result["text"],
+        "rewritten":             rewritten_text,
         "region":                region,
         "persona_applied":       persona["tone"],
         "festival":              festival,

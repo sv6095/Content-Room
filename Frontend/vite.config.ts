@@ -6,7 +6,7 @@ import path from "path";
 export default defineConfig(({ mode }) => {
   // Load .env so VITE_API_BASE_URL is available at config time
   const env = loadEnv(mode, process.cwd(), "");
-  const backendUrl = env.VITE_API_BASE_URL || "http://localhost:8000";
+  const backendUrl = env.VITE_API_BASE_URL?.trim();
 
   return {
     server: {
@@ -15,22 +15,21 @@ export default defineConfig(({ mode }) => {
       hmr: {
         overlay: false,
       },
-      proxy: {
-        // All /api/* and /health requests are forwarded to the backend.
-        // Target reads from VITE_API_BASE_URL (.env) — falls back to localhost:8000.
-        // In the browser's Network DevTools panel they appear as same-origin
-        // calls — the real backend host is never visible to the end user.
-        "/api": {
-          target: backendUrl,
-          changeOrigin: true,
-          secure: false,
-        },
-        "/health": {
-          target: backendUrl,
-          changeOrigin: true,
-          secure: false,
-        },
-      },
+      proxy: backendUrl
+        ? {
+            // All /api/* and /health requests are forwarded to the configured backend.
+            "/api": {
+              target: backendUrl,
+              changeOrigin: true,
+              secure: false,
+            },
+            "/health": {
+              target: backendUrl,
+              changeOrigin: true,
+              secure: false,
+            },
+          }
+        : {},
     },
     plugins: [react()],
     resolve: {

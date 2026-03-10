@@ -43,9 +43,9 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 5. **Access the API**
-- API: http://localhost:8000
-- Interactive Docs: http://localhost:8000/docs
-- Alternative Docs: http://localhost:8000/redoc
+- API: https://<your-api-id>.execute-api.<region>.amazonaws.com
+- Interactive Docs: https://<your-api-id>.execute-api.<region>.amazonaws.com/docs
+- Alternative Docs: https://<your-api-id>.execute-api.<region>.amazonaws.com/redoc
 
 ---
 
@@ -80,7 +80,7 @@ Backend/
 
 ### JWT-Based Authentication
 - **Algorithm**: HS256
-- **Password Hashing**: Argon2 (PHC winner, more secure than bcrypt)
+- **Password Hashing**: bcrypt
 - **Token Expiration**: Configurable (default: 30 days)
 
 ### Authentication Modes
@@ -219,7 +219,7 @@ Automatic fallback to alternative providers if primary service fails.
 
 ```env
 # Database
-DATABASE_URL=postgresql://user:password@localhost/contentroom
+DATABASE_URL=postgresql://user:password@db-host/contentroom
 # Or for SQLite (development):
 # DATABASE_URL=sqlite:///./content_room.db
 
@@ -231,15 +231,15 @@ ACCESS_TOKEN_EXPIRE_MINUTES=43200  # 30 days
 # OpenAI
 OPENAI_API_KEY=sk-...
 
-# AWS (Optional)
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=...
+# AWS
+# In Lambda, do NOT set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+# Use execution role credentials automatically provided by AWS.
 AWS_REGION=us-east-1
 
 # Application
 ENVIRONMENT=development
 DEBUG=true
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+CORS_ORIGINS=https://your-frontend-domain.example
 ```
 
 ---
@@ -254,7 +254,7 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 - ✅ Improved error handling and user feedback
 
 ### Features
-- ✅ JWT authentication with Argon2 password hashing
+- ✅ JWT authentication with bcrypt password hashing
 - ✅ Async SQLAlchemy for better performance
 - ✅ Comprehensive input validation with Pydantic
 - ✅ AI service fallback system
@@ -289,7 +289,7 @@ pytest tests/test_auth.py
 
 ## 🛡️ Security Features
 
-- **Argon2 Password Hashing**: Industry-leading security
+- **bcrypt Password Hashing**: Secure password storage
 - **JWT Tokens**: Stateless authentication
 - **CORS Protection**: Configurable origins
 - **SQL Injection Prevention**: SQLAlchemy ORM protection
@@ -324,7 +324,7 @@ tail -f app.log
 - `sqlalchemy` - ORM with async support
 - `pydantic` - Data validation
 - `python-jose` - JWT handling
-- `argon2-cffi` - Password hashing
+- `bcrypt` - Password hashing
 
 ### AI Services
 - `openai` - OpenAI API client
@@ -336,6 +336,18 @@ tail -f app.log
 - `aiosqlite` - SQLite async driver
 
 See `requirements.txt` for complete list.
+
+---
+
+## AWS Service Alignment
+
+For AWS initialization and API-flow mapping (code-initialized vs infra-managed services), see:
+
+- `AWS_SERVICE_ALIGNMENT.md`
+
+Deployment guide clarification addendum (at project root):
+
+- `../ContentRoom_AWS_Deployment_Guide_Addendum.md`
 
 ---
 
@@ -355,4 +367,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Backend API Documentation**: http://localhost:8000/docs
+**Backend API Documentation**: https://<your-api-id>.execute-api.<region>.amazonaws.com/docs

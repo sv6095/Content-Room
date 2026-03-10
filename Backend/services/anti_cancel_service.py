@@ -120,8 +120,6 @@ async def _aws_entity_detection(text: str) -> dict:
             client = boto3.client(
                 "comprehend",
                 region_name=settings.aws_region,
-                aws_access_key_id=settings.aws_access_key_id,
-                aws_secret_access_key=settings.aws_secret_access_key,
             )
             entities = client.detect_entities(Text=text, LanguageCode="en")
             key_phrases = client.detect_key_phrases(Text=text, LanguageCode="en")

@@ -30,6 +30,12 @@ class StorageStatusResponse(BaseModel):
     providers: dict
 
 
+class PresignedUploadRequest(BaseModel):
+    filename: str
+    content_type: str
+    folder: str = "uploads"
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_file(
     file: UploadFile = File(...),
@@ -87,6 +93,24 @@ async def upload_file(
     except Exception as e:
         logger.error(f"Unexpected upload error: {e}")
         raise HTTPException(status_code=500, detail="Upload failed")
+
+
+@router.post("/presigned-upload")
+async def create_presigned_upload(request: PresignedUploadRequest):
+    storage = get_storage_service()
+    try:
+        result = await storage.create_presigned_upload_url(
+            filename=request.filename,
+            content_type=request.content_type,
+            folder=request.folder,
+        )
+        return result
+    except UploadError as e:
+        logger.error(f"Presigned upload creation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Presigned URL failed: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected presigned upload error: {e}")
+        raise HTTPException(status_code=500, detail="Presigned URL failed")
 
 
 @router.get("/status", response_model=StorageStatusResponse)

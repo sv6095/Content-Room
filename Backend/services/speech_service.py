@@ -10,6 +10,7 @@ Supports audio transcription with timestamp extraction.
 import logging
 import tempfile
 import os
+import uuid
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
@@ -39,8 +40,6 @@ class SpeechService:
                 self.aws_client = boto3.client(
                     'transcribe',
                     region_name=settings.aws_region,
-                    aws_access_key_id=settings.aws_access_key_id,
-                    aws_secret_access_key=settings.aws_secret_access_key,
                 )
                 logger.info("AWS Transcribe initialized")
             except Exception as e:
@@ -153,8 +152,8 @@ class SpeechService:
         """
         fallback_used = False
         
-        # Note: AWS Transcribe is async/batch, so we use Whisper for real-time
-        # For production, you'd implement S3 upload + async job
+        # AWS Transcribe remains async (job-based). Interactive routes still use
+        # local transcription while the Step Functions pipeline uses job APIs.
         
         # Try Whisper first (fast local processing)
         try:
@@ -183,6 +182,29 @@ class SpeechService:
                 "fallback_used": True,
                 "note": "Speech recognition unavailable, manual transcription recommended",
             }
+
+    def start_transcription_job(
+        self,
+        media_uri: str,
+        media_format: str = "mp4",
+        language_code: str = "en-US",
+    ) -> Dict[str, Any]:
+        if not self.aws_client:
+            raise SpeechError("AWS Transcribe not configured")
+        job_name = f"content-room-{uuid.uuid4().hex[:20]}"
+        self.aws_client.start_transcription_job(
+            TranscriptionJobName=job_name,
+            Media={"MediaFileUri": media_uri},
+            MediaFormat=media_format,
+            LanguageCode=language_code,
+        )
+        return {"job_name": job_name, "provider": "aws_transcribe"}
+
+    def get_transcription_job(self, job_name: str) -> Dict[str, Any]:
+        if not self.aws_client:
+            raise SpeechError("AWS Transcribe not configured")
+        result = self.aws_client.get_transcription_job(TranscriptionJobName=job_name)
+        return result.get("TranscriptionJob", {})
     
     async def transcribe_bytes(
         self,

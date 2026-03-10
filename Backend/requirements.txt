@@ -1,128 +1,32 @@
-# ─────────────────────────────────────────────────────────
-# Core Framework
-# ─────────────────────────────────────────────────────────
 fastapi==0.109.2
-uvicorn[standard]==0.27.1
+mangum==0.17.0
 pydantic==2.6.1
 pydantic-settings==2.1.0
-python-multipart==0.0.9
 python-dotenv==1.0.1
-
-# HTTP Client
+python-multipart==0.0.9
+email-validator==2.1.0.post1
 httpx==0.27.0
-aiohttp==3.9.3
-
-# Database (SQLite fallback — zero cost)
-sqlalchemy==2.0.25
-aiosqlite==0.19.0
-
-# Amazon RDS (PostgreSQL) — PRIMARY database per 24-hr migration goal
-# Required when AWS_RDS_URL is set (postgresql+asyncpg://...)
-asyncpg==0.29.0
-psycopg2-binary==2.9.9
-greenlet>=3.0.0
-
-# Authentication
 python-jose[cryptography]==3.3.0
-argon2-cffi==23.1.0
 
-# ─────────────────────────────────────────────────────────
-# AWS SDK (PRIMARY — Hackathon)
-# Services used: Bedrock, Comprehend, Rekognition, Translate,
-#               Transcribe, SageMaker, S3, DynamoDB
-# ─────────────────────────────────────────────────────────
+
 boto3==1.34.49
-botocore==1.34.49
+aws-xray-sdk==2.14.0
 
-# ─────────────────────────────────────────────────────────
-# FALLBACK: LLM Services (All Free Tiers)
-# ─────────────────────────────────────────────────────────
-google-generativeai==0.4.0
-openai==1.12.0
-
-# ─────────────────────────────────────────────────────────
-# Feature #3: Content DNA Fingerprinting
-# Fallback embeddings when SageMaker endpoint unavailable
-# ─────────────────────────────────────────────────────────
-sentence-transformers==2.7.0
-
-# ─────────────────────────────────────────────────────────
-# Feature #2: Risk vs Reach Dial
-# Fallback sentiment scoring
-# ─────────────────────────────────────────────────────────
-textblob==0.18.0
-
-# ─────────────────────────────────────────────────────────
-# Feature #4 & #10: Anti-Cancel Shield + Heatmap
-# NLP fallback for entity detection
-# ─────────────────────────────────────────────────────────
-spacy==3.7.4
-
-# ─────────────────────────────────────────────────────────
-# Feature #7: Trend Lifespan Predictor
-# Fallback time-series forecasting when SageMaker unavailable
-# ─────────────────────────────────────────────────────────
-prophet==1.1.5
-pandas==2.2.0
-
-# ─────────────────────────────────────────────────────────
-# Audio Processing (Free/Local) — AWS Transcribe primary
-# ─────────────────────────────────────────────────────────
-openai-whisper==20250625
-pydub==0.25.1
-SpeechRecognition==3.10.1
-
-# ─────────────────────────────────────────────────────────
-# Translation (Free) — AWS Translate primary
-# ─────────────────────────────────────────────────────────
-deep-translator==1.11.4
-langdetect==1.0.9
-
-# ─────────────────────────────────────────────────────────
-# Vision (Free/Local) — AWS Rekognition primary
-# ─────────────────────────────────────────────────────────
-opencv-python-headless==4.9.0.80
-Pillow==10.2.0
-numpy==1.26.4
-
-# ─────────────────────────────────────────────────────────
-# Storage
-# ─────────────────────────────────────────────────────────
-firebase-admin==6.4.0
-APScheduler==3.10.4
-
-# ─────────────────────────────────────────────────────────
-# Utilities
-# ─────────────────────────────────────────────────────────
-cachetools==5.3.2
 python-dateutil==2.8.2
 tenacity==8.2.3
+cachetools==5.3.2
+requests==2.32.3
+aiohttp==3.10.11
+groq
 
-# ─────────────────────────────────────────────────────────
-# Testing
-# ─────────────────────────────────────────────────────────
-pytest==8.0.1
-pytest-asyncio==0.23.5
+deep-translator==1.11.4
 
-# ─────────────────────────────────────────────────────────
-# Content Moderation (Local/Fallback)
-# ─────────────────────────────────────────────────────────
-localmod @ git+https://github.com/KOKOSde/localmod.git
-torch>=2.0.0
-torchvision>=0.15.0
-detoxify>=0.5.0
+numpy==2.1.3
+Pillow==10.2.0
 
-# ─────────────────────────────────────────────────────────
-# Scraping / Data Collection (Reverse Virality Mining)
-# ─────────────────────────────────────────────────────────
+apscheduler==3.10.4
+holidays==0.57
 beautifulsoup4==4.12.3
-selenium==4.18.1
-requests==2.31.0
 
-# Misc
-holidays==0.42.0
-
-
-huggingface_hub==0.21.4
-
-openai-whisper
+bcrypt==4.1.2
+passlib[bcrypt]==1.7.4

@@ -86,7 +86,7 @@ function cleanMarkdownMarkers(text: string): string {
 }
 
 function parseSectionBlocks(body: string): InsightSection[] {
-    const headingRegex = /(?:^|\n)\s*(?:##\s*)?(Competitor Strategy|Gaps\s*&\s*Opportunities|Winning Content Ideas)\s*\n/gi;
+    const headingRegex = /(?:^|\n)\s*(?:##\s*)?(Competitor Strategy|Scorecard|Gaps\s*&\s*Opportunities|Winning Content Ideas)\s*\n/gi;
     const matches = [...body.matchAll(headingRegex)];
 
     if (matches.length === 0) {
@@ -490,7 +490,7 @@ const CompetitorAnalysis: React.FC = () => {
                 </CardContent>
             </Card>
 
-            {analysis && (
+            {(analysis || structured) && (
                 <div className="space-y-5">
                     <style>{`
                         @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
@@ -613,6 +613,11 @@ const CompetitorAnalysis: React.FC = () => {
                                     ))}
                                 </div>
                             )}
+                            {activeTab === 'gaps' && parsed.gaps.length === 0 && (
+                                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-[#B5B5B5]">
+                                    No high-confidence gap cards were generated. Review the full analysis below for additional context.
+                                </div>
+                            )}
 
                             {activeTab === 'strategy' && (
                                 <div className="grid gap-3 md:grid-cols-2 intel-fade">
@@ -679,11 +684,16 @@ const CompetitorAnalysis: React.FC = () => {
                                     ))}
                                 </div>
                             )}
+                            {activeTab === 'ideas' && parsed.ideas.length === 0 && (
+                                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-[#B5B5B5]">
+                                    No ready-to-use ideas were parsed from this run. Check the fallback analysis text below.
+                                </div>
+                            )}
 
                             {(activeTab === 'gaps' && parsed.gaps.length === 0) ||
                             (activeTab === 'ideas' && parsed.ideas.length === 0) ? (
                                 <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-primary prose-a:text-blue-500">
-                                    <ReactMarkdown>{analysis}</ReactMarkdown>
+                                    <ReactMarkdown>{analysis || ''}</ReactMarkdown>
                                 </article>
                             ) : null}
                         </CardContent>

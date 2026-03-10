@@ -1,0 +1,16 @@
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name = "content-room-backend"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+region = "ap-south-1"
+s3_prefix = "content-room-backend"
+parameter_overrides = "UsersTableName=\"ContentRoom-Users\" ContentTableName=\"ContentRoom-Content\" AnalysisTableName=\"ContentRoom-Analysis\" AICacheTableName=\"ContentRoom-AICache\" ModerationCacheTableName=\"ContentRoom-ModerationCache\" S3BucketName=\"content-room-media-125903111660\" FrontendBucketName=\"content-room-frontend-125903111660\" BedrockModelId=\"amazon.nova-lite-v1:0\""
+image_repositories = []

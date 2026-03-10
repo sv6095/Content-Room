@@ -36,8 +36,6 @@ async def _aws_comprehend_batch_sentiment(texts: List[str]) -> dict:
             client = boto3.client(
                 "comprehend",
                 region_name=settings.aws_region,
-                aws_access_key_id=settings.aws_access_key_id,
-                aws_secret_access_key=settings.aws_secret_access_key,
             )
             batch = [{"Index": i, "Text": t[:4900]} for i, t in enumerate(texts[:25])]
             response = client.batch_detect_sentiment(TextList=[b["Text"] for b in batch], LanguageCode="en")
