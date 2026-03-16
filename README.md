@@ -8,11 +8,7 @@
 
 **India's First AI-Powered Content Workflow Platform for the Creator Economy**
 
-<<<<<<< HEAD
 *Hackathon Submission 2026
-=======
-*Hackathon Submission 2026  ·  Confidential*
->>>>>>> 3bdd988 (Add image generation service)
 
 
 # **1. What Is Content Room?**
@@ -48,8 +44,21 @@ Content Room collapses this 8-tool workflow into a single platform with 7 deeply
 
 ## **1.3 Technology Foundation**
 
-|<p>**Frontend**</p><p>React 18 + TypeScript</p><p>Vite build tool</p><p>TailwindCSS + shadcn/ui</p><p>React Query + React Hook Form</p><p>React Router v6</p><p>Lucide React icons</p>|<p>**Backend**</p><p>Python FastAPI (async)</p><p>Uvicorn ASGI server</p><p>SQLAlchemy async ORM</p><p>PostgreSQL (prod) / SQLite (dev)</p><p>python-jose JWT + Argon2</p><p>Pydantic v2 validation</p>|
-| :- | :- |
+### Frontend
+- React 18 + TypeScript
+- Vite build tool
+- TailwindCSS + shadcn/ui
+- React Query + React Hook Form
+- React Router v6
+- Lucide React icons
+
+### Backend
+- Python FastAPI (async)
+- Uvicorn ASGI server
+- AWS DynamoDB (NoSQL)
+- AWS SDK (boto3)
+- python-jose JWT + Argon2
+- Pydantic v2 validation
 
 # **2. Authentication & User System**
 
@@ -65,7 +74,7 @@ Content Room collapses this 8-tool workflow into a single platform with 7 deeply
 |Session management|JWT (python-jose)|Access tokens are issued through the auth service and attached to authenticated API calls.|
 |Password hashing|Argon2|Winner of the Password Hashing Competition. More secure than bcrypt or SHA-based approaches. All passwords hashed before storage.|
 |Cross-origin control|CORS middleware|Backend only accepts browser requests from configured origins. Helps reduce unauthorized cross-origin browser calls.|
-|SQL injection prevention|SQLAlchemy ORM|All database queries parameterized through ORM layer — no raw SQL construction.|
+|Database query safety|DynamoDB (NoSQL) + boto3|No raw SQL layer. Access is performed through typed SDK operations and validated request payloads.|
 |Input validation|Pydantic v2 schemas|All incoming API requests validated against strict schemas. Malformed data rejected before reaching business logic.|
 
 ## **2.2 Authentication Endpoints**
@@ -426,7 +435,7 @@ A more advanced version of the Mental Health Meter that goes beyond diagnosis to
 |Self-Evolving Weekly Schedule|Complete AI-generated schedule matching your current capacity — specific days, times, and content types|
 
 # **10. Data Storage & Content Library**
-Generated and processed content is stored when users are logged in. The backend uses SQLAlchemy's async engine for high concurrency without blocking and switches between PostgreSQL (production) and SQLite (development) based on environment configuration.
+Generated and processed content is stored when users are logged in. The backend uses AWS DynamoDB for serverless, low-latency storage of analysis records, history, and cached AI responses.
 
 ## **10.1 Content Record Schema**
 
@@ -474,9 +483,9 @@ The backend does not rely on a single AI provider. If a provider fails (quota ex
 
 # **13. Performance Architecture**
 ## **13.1 Backend Performance**
-- Async/await throughout: Every database call, external API call, and file operation uses Python's asyncio. Thousands of simultaneous users can be served without thread blocking.
+- Async/await throughout: Every DynamoDB operation, external API call, and file operation uses Python's asyncio patterns. Thousands of simultaneous users can be served without thread blocking.
 - Parallel AI calls: Tasks requiring multiple AI results (caption + summary + hashtags simultaneously, all 6 pre-flight checks at once) fire all API calls in parallel — not sequentially.
-- Connection pooling: Database connection pool managed by SQLAlchemy's async engine, reusing connections efficiently across concurrent requests.
+- AWS-native throughput: DynamoDB on-demand scaling handles burst traffic without managing connection pools or database servers.
 - Rate limiting: Built-in protection prevents any single user or IP from overwhelming the API — prevents abuse and ensures fair access.
 
 ## **13.2 Frontend Performance**
@@ -518,9 +527,8 @@ The backend does not rely on a single AI provider. If a provider fails (quota ex
 |Markdown rendering|react-markdown|Rendering AI-generated markdown output in all tabs|
 |Backend framework|FastAPI (Python 3.10+)|High-performance async REST API with auto OpenAPI docs|
 |Server|Uvicorn (ASGI)|Production-grade async HTTP server|
-|Database ORM|SQLAlchemy (async)|Type-safe async database operations|
-|Database (prod)|PostgreSQL via asyncpg|Relational data at scale with async driver|
-|Database (dev)|SQLite via aiosqlite|Zero-setup local development environment|
+|Database (primary)|AWS DynamoDB|Serverless NoSQL storage for content records, history, and caching|
+|AWS SDK|boto3|Official AWS client layer for DynamoDB, S3, and service integrations|
 |Authentication|python-jose (JWT) + Argon2|Secure token-based sessions with modern password hashing|
 |AI — primary generation|AWS Bedrock (Nova Lite/Pro)|Text generation, cultural rewriting, competitor analysis|
 |AI — image safety|AWS Rekognition|Image moderation and label detection in production paths|
