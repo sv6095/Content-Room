@@ -91,7 +91,7 @@ Content Room collapses this 8-tool workflow into a single platform with 7 deeply
 |**01**|**✨  Creator Studio**|
 | :-: | :- |
 
-The Creator Studio is the primary content generation workspace — the first feature creators interact with and the most frequently used. It transforms raw ideas or uploaded media into polished, platform-ready content across multiple languages.
+Creator Studio is the primary creation workspace. In the current implementation, it combines text generation, media understanding, transcription, translation, and optional media-generation actions inside one UI, then allows saving outputs to the content library.
 
 ## **3.1 Content Type Selection**
 The workspace begins with choosing the content type being worked on. This selection intelligently changes the upload interface and the context passed to AI for better generation results:
@@ -103,28 +103,19 @@ The workspace begins with choosing the content type being worked on. This select
 |Audio|Podcasts, voice memos, recordings|Transcribed first, then analyzed for generation context|
 |Video|Reels, clips, tutorials, ads|Frame extraction + visual analysis for generation context|
 
-## **3.2 AI Generation Tools**
-Once content or a file is uploaded, generators can be triggered individually or all at once with a single "Generate All" button:
+## **3.2 Core Generation Actions (Actual API)**
+The Studio can run actions one-by-one, or run caption + summary + hashtags together through "Generate All".
 
-### **Caption Generator**
-- Generates attention-grabbing captions tailored to the chosen platform.
-- Built-in platform presets automatically respect character limits:
-- Twitter/X: 280 characters
-- Instagram: 2,200 characters
-- LinkedIn: 3,000 characters
-- Facebook: 63,206 characters
-- Custom: set manually via a 100–3,000 character slider
+|**Studio Action**|**API Endpoint**|**What It Produces**|
+| :- | :- | :- |
+|Caption generation|`/api/v1/create/caption`|Platform-aware caption with configurable max length and optional model override|
+|Summary generation|`/api/v1/create/summary`|Short summary optimized for preview/snippet usage|
+|Hashtag generation|`/api/v1/create/hashtags`|Topic-relevant hashtag set (count controlled from UI)|
+|Tone rewrite|`/api/v1/create/rewrite`|Same message rewritten in a selected tone|
+|Script generation|`/api/v1/create/script`|Creator-ready scripts (short video, ad copy, voiceover, podcast intro)|
+|Idea generation|`/api/v1/create/ideas`|Niche + audience + platform specific content ideas|
 
-### **Summary Generator**
-- Condenses long-form content into ~150-word concise summaries.
-- Designed for 'above the fold' descriptions, preview snippets, and newsletter summaries.
-
-### **Hashtag Generator**
-- Analyzes content topic and generates relevant, trending hashtags.
-- Quantity controlled by a slider from 3 to 20 hashtags.
-- Output displayed as clickable chips with one-click copy.
-
-## **3.3 AI Media Analysis Mode**
+## **3.3 AI Media Analysis Mode (Actual)**
 
 |**How Media Analysis Works**|
 | :- |
@@ -132,11 +123,14 @@ Once content or a file is uploaded, generators can be triggered individually or 
 |to analyze the media file itself — not just a text description — and automatically extract understood|
 |content to generate captions, summaries, and hashtags from that understanding.|
 ||
-|This means: upload a photo → get a caption written for it. No text input required.|
-|Audio is transcribed first. Video frames are sampled and analyzed visually before generation.|
+|This means: upload a photo/video/audio file and the Studio first extracts context, then generates|
+|caption/summary/hashtags from that extracted context.|
+|Image upload: `/api/v1/create/extract-and-generate` -> visual labels extraction.|
+|Audio upload: transcribed, then used as generation context.|
+|Video upload: key frames are sampled, analyzed, and merged into one context string.|
 
 ## **3.4 Multi-Language Translation**
-After generating caption and summary, one-click translation into 8 major Indian languages is available simultaneously (plus English source support):
+After generating caption and summary, Studio can translate each output using `/api/v1/translate/text` into 8 major Indian languages (plus English source support):
 
 |**Language**|**Script**|**Region**|
 | :- | :- | :- |
@@ -149,10 +143,24 @@ After generating caption and summary, one-click translation into 8 major Indian 
 |Gujarati|Gujarati (ગુજરાતી)|Gujarat|
 |Odia|Odia (ଓଡ଼ିଆ)|Odisha|
 
-Both the caption and summary are translated simultaneously. Translated text appears in a distinct green-tinted box and can be copied independently.
+Both caption and summary can be translated from the same screen. The translation service also includes transliterated-input handling (for example, romanized Hindi/Telugu text).
 
-## **3.5 Content Library**
-Any generated content can be saved to the personal content library (when logged in). The original text, generated caption, summary, and hashtags are stored together as a single content record. Direct navigation to the saved item is available from within the Studio.
+## **3.5 Audio Transcription and Save Flow**
+- Audio transcription endpoint: `/api/v1/create/transcribe`.
+- This route requires login and applies per-user Creator Studio usage limits.
+- Generated outputs can be saved to content library records via content APIs from Studio.
+
+## **3.6 Services Used by Creator Studio (Actual Backend Stack)**
+
+|**Pipeline Part**|**Primary Service**|**Fallback / Chain**|**Notes**|
+| :- | :- | :- | :- |
+|Text generation (caption/summary/hashtags/rewrite/script/ideas)|AWS Bedrock (Amazon Nova models)|Groq Cloud|Provider is returned in API responses for transparency|
+|Image understanding for media extraction|AWS Rekognition|Groq Vision -> simple fallback|Used when image input is sent to extract-and-generate|
+|Video understanding for media extraction|Frame extraction pipeline (OpenCV) + Vision service|Per-frame fallback from vision chain|Frames are sampled and aggregated into one context|
+|Audio transcription in Creator Studio route|Whisper (local)|Google Speech free -> simple fallback|Current interactive route prefers local transcription path|
+|Translation|AWS Translate|deep-translator (Google wrapper)|Supports native scripts and transliterated Indian-language input|
+|Image generation tools in Studio|Bedrock Titan Image / Nova Canvas|N/A|Exposed via `/api/v1/media/image/generate`|
+|Video production tools in Studio|AWS Elemental MediaConvert / Amazon Nova Reel|N/A|Exposed via `/api/v1/media/motion/*` endpoints|
 
 # **4. Content Moderation**
 
