@@ -268,28 +268,19 @@ async def analyze_cancel_risk(
             f"{f['keyword']} (category: {f['category']}, severity: {f.get('severity', 'HIGH')})"
             for f in local_flags[:6]
         ]
-        alt_prompt = f"""You are an expert in social media content safety and Indian digital sensitivity.
-
-This content has been flagged by our rule engine:
+        alt_prompt = f"""Role: social media safety editor (India context).
 Flags: {flag_summary}
-Risk Score: {risk_score}/100
+Risk: {risk_score}/100
+Input: {text}
+Context: {'Critical threat/violence language detected.' if has_critical else 'Cultural/regional sensitivity risk detected.'}
 
-Original content:
-{text}
-
-{'⚠️ CRITICAL: This content contains threat or violence language that is platform-unsafe.' if has_critical else 'This content may be culturally or regionally sensitive in India.'}
-
-Provide:
-1. A safe rewritten version preserving the core message
-2. Two alternative phrasings for the risky sections
-3. One sentence explaining why this is risky
-
-Format:
-SAFE VERSION: [rewritten text]
-ALT 1: [alternative phrase]
-ALT 2: [alternative phrase]
-WHY: [explanation]"""
-        alt_result = await llm.generate(alt_prompt, task="anti_cancel", max_tokens=500)
+Return exactly:
+SAFE VERSION: <safe rewrite preserving core meaning>
+ALT 1: <safer phrase>
+ALT 2: <safer phrase>
+WHY: <one-sentence reason>
+"""
+        alt_result = await llm.generate(alt_prompt, task="anti_cancel", max_tokens=280)
         alternatives = [alt_result["text"]]
 
     # ── Recommendation message ────────────────────────────────────────────────

@@ -2,20 +2,13 @@
 LLM Service for Content Room
 
 AWS Bedrock-first with automatic fallback chain:
-1. AWS Bedrock (Claude/Titan)  — PRIMARY
+1. AWS Bedrock (nova)  — PRIMARY
 2. Groq Cloud                  — FREE tier (no CC), ultra-fast Llama 3.3 70B
                                   https://console.groq.com/
-3. OpenRouter                  — FREE tier 50 req/day, no CC required
-                                  Routes to Llama 3.3 70B / Gemini Flash / Mistral
-                                  https://openrouter.ai/  (sign up → free API key)
-4. Cerebras Inference          — FREE tier, ultra-fast Llama 3.1 70B
-                                  https://cloud.cerebras.ai/  (sign up → free API key)
-7. Simple Templates            — ULTIMATE fallback (no API needed)
 
 Each provider is tried in order until one succeeds.
 """
 import logging
-import random
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 from enum import Enum
@@ -24,6 +17,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import settings
+from services.dynamo_repositories import get_users_repo, get_analysis_repo
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +26,6 @@ class LLMProvider(str, Enum):
     """Available LLM providers."""
     AWS_BEDROCK = "aws_bedrock"
     GROK = "grok"
-    OPENROUTER = "openrouter"
-    CEREBRAS = "cerebras"
-    OLLAMA = "ollama"
-    SIMPLE = "simple_template"
 
 
 class LLMError(Exception):
@@ -73,36 +63,76 @@ class BaseLLMProvider(ABC):
 
 class AWSBedrockProvider(BaseLLMProvider):
     """
-    AWS Bedrock provider using Claude or Titan.
-    PRIMARY for AWS hackathon.
+    AWS Bedrock provider using Amazon Nova models.
+    Primary provider with task-aware model routing.
     """
     
     def __init__(self):
         self.client = None
         if self.is_available():
             try:
-                import boto3
+                import importlib
+                boto3 = importlib.import_module("boto3")
                 self.client = boto3.client(
                     'bedrock-runtime',
-                    region_name=settings.aws_region,
+                    # Force Bedrock runtime to N. Virginia for Nova Gen 2 path.
+                    region_name='us-east-1',
                 )
-                logger.info("AWS Bedrock provider initialized")
+                logger.info("AWS Bedrock provider initialized in us-east-1")
             except Exception as e:
                 logger.warning(f"Failed to initialize AWS Bedrock: {e}")
     
     def is_available(self) -> bool:
         return settings.aws_configured and settings.use_aws_bedrock
+
+    @staticmethod
+    def _is_nova_model(model_id: str) -> bool:
+        # Handles both regional inference profile IDs and direct model IDs.
+        # Examples:
+        # - us.amazon.nova-lite-v1:0
+        # - amazon.nova-lite-v1:0
+        mid = (model_id or "")
+        return "amazon.nova" in mid or ":inference-profile/" in mid
+
+    def _expand_model_candidates(self, model_id: str) -> List[str]:
+        """
+        Use configured model IDs as-is.
+        Supports explicit inference profile IDs/ARNs and direct Nova IDs.
+        """
+        if not model_id:
+            return []
+        return [model_id.strip()]
     
     async def generate(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
         if not self.client:
             raise ProviderUnavailableError("AWS Bedrock not configured")
-        
-        try:
-            import json
-            chosen_model = model or settings.bedrock_model_id
-            max_tokens = kwargs.get("max_tokens", 1024)
 
-            if chosen_model.startswith("amazon.nova"):
+        import json
+        primary_model = model or settings.bedrock_model_id
+        fallback_models = [
+            primary_model,
+            settings.bedrock_model_id_lite,
+            settings.bedrock_model_id_micro,
+            settings.bedrock_model_id_reasoning,
+        ]
+        # Keep order, expand model/profile variants, drop duplicates/empties.
+        candidate_models: List[str] = []
+        for model_id in fallback_models:
+            for expanded in self._expand_model_candidates(model_id):
+                if expanded not in candidate_models:
+                    candidate_models.append(expanded)
+
+        max_tokens = kwargs.get("max_tokens", 1024)
+        task = kwargs.get("task", "general")
+        errors: List[str] = []
+
+        for chosen_model in candidate_models:
+            try:
+                if not self._is_nova_model(chosen_model):
+                    raise ProviderUnavailableError(
+                        f"Unsupported Bedrock model '{chosen_model}'. Expected Amazon Nova model ID."
+                    )
+
                 body = json.dumps(
                     {
                         "messages": [
@@ -112,36 +142,41 @@ class AWSBedrockProvider(BaseLLMProvider):
                             }
                         ],
                         "inferenceConfig": {
-                            "max_new_tokens": max_tokens,
+                            "maxTokens": max_tokens,
                             "temperature": kwargs.get("temperature", 0.7),
                         },
                     }
                 )
-            else:
-                # Backward-compatible Anthropic format
-                body = json.dumps(
-                    {
-                        "anthropic_version": "bedrock-2023-05-31",
-                        "max_tokens": max_tokens,
-                        "messages": [{"role": "user", "content": prompt}],
-                    }
+
+                response = self.client.invoke_model(
+                    modelId=chosen_model,
+                    body=body,
+                    contentType="application/json",
+                    accept="application/json"
                 )
-            
-            response = self.client.invoke_model(
-                modelId=chosen_model,
-                body=body,
-                contentType="application/json",
-                accept="application/json"
-            )
-            
-            result = json.loads(response['body'].read())
-            if chosen_model.startswith("amazon.nova"):
-                return result.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
-            return result['content'][0]['text']
-            
-        except Exception as e:
-            logger.error(f"AWS Bedrock error: {e}")
-            raise ProviderUnavailableError(f"AWS Bedrock failed: {e}")
+
+                result = json.loads(response["body"].read())
+                text = result.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+
+                if not text or not text.strip():
+                    raise ProviderUnavailableError("AWS Bedrock returned empty output")
+
+                logger.info(f"AWS Bedrock success with model '{chosen_model}' for task '{task}'")
+                return text
+            except Exception as e:
+                if "on-demand throughput" in str(e).lower():
+                    logger.warning(
+                        "Bedrock model '%s' requires an inference profile ID/ARN. "
+                        "Consider setting BEDROCK_MODEL_ID* to APAC/US/EU profile IDs or profile ARN.",
+                        chosen_model,
+                    )
+                errors.append(f"{chosen_model}: {e}")
+                logger.warning(f"AWS Bedrock model '{chosen_model}' failed for task '{task}', trying next")
+                continue
+
+        err = "; ".join(errors)
+        logger.error(f"AWS Bedrock failed across model chain: {err}")
+        raise ProviderUnavailableError(f"AWS Bedrock failed: {err}")
 
 
 class GrokProvider(BaseLLMProvider):
@@ -160,11 +195,12 @@ class GrokProvider(BaseLLMProvider):
     def is_available(self) -> bool:
         return bool(self.api_key)
     
-    async def generate(self, prompt: str, model: str = "llama-3.3-70b-versatile", **kwargs) -> str:
+    async def generate(self, prompt: str, model: Optional[str] = None, **kwargs) -> str:
         if not self.api_key:
             raise ProviderUnavailableError("Groq API key not configured")
         
         try:
+            selected_model = model or kwargs.get("grok_model") or settings.groq_model
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
@@ -173,7 +209,7 @@ class GrokProvider(BaseLLMProvider):
                         "Content-Type": "application/json"
                     },
                     json={
-                        "model": model,
+                        "model": selected_model,
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": kwargs.get("max_tokens", 1024),
                         "temperature": kwargs.get("temperature", 0.7),
@@ -188,288 +224,6 @@ class GrokProvider(BaseLLMProvider):
             raise ProviderUnavailableError(f"Groq failed: {e}")
 
 
-class OpenRouterProvider(BaseLLMProvider):
-    """
-    OpenRouter — Free tier, no credit card required.
-    Single API that routes to the best free model available.
-
-    Free tier: 50 requests/day, 200 req/min (with account).
-    Free models include: Llama 3.3 70B, Gemini Flash, Mistral 7B, DeepSeek.
-
-    Sign up (free) at: https://openrouter.ai/
-    API key format: sk-or-v1-...
-    Docs: https://openrouter.ai/docs
-    """
-
-    # Ordered list of free model IDs to try (rotates on failure)
-    FREE_MODELS = [
-        "meta-llama/llama-3.3-70b-instruct:free",   # Llama 3.3 70B — best quality
-        "google/gemini-flash-1.5:free",              # Gemini Flash — very reliable
-        "mistralai/mistral-7b-instruct:free",        # Mistral 7B — lightweight fallback
-        "deepseek/deepseek-r1:free",                 # DeepSeek R1 — reasoning model
-    ]
-    BASE_URL = "https://openrouter.ai/api/v1"
-
-    def __init__(self):
-        self.api_key = getattr(settings, "openrouter_api_key", None) or ""
-
-    def is_available(self) -> bool:
-        return bool(self.api_key)
-
-    async def generate(self, prompt: str, **kwargs) -> str:
-        if not self.api_key:
-            raise ProviderUnavailableError("OpenRouter API key not set")
-
-        for model in self.FREE_MODELS:
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(
-                        f"{self.BASE_URL}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json",
-                            # Recommended by OpenRouter for free-tier routing
-                            "HTTP-Referer": "https://github.com/Neil2813/Content-Room",
-                            "X-Title": "Content Room",
-                        },
-                        json={
-                            "model": model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": kwargs.get("max_tokens", 1024),
-                            "temperature": kwargs.get("temperature", 0.7),
-                        },
-                    )
-                    if resp.status_code == 429:
-                        logger.warning(f"OpenRouter rate limit hit for model {model}, trying next")
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    text = data["choices"][0]["message"]["content"].strip()
-                    if text:
-                        logger.info(f"OpenRouter success with model: {model}")
-                        return text
-            except Exception as e:
-                logger.warning(f"OpenRouter model {model} failed: {e}")
-                continue
-
-        raise ProviderUnavailableError("All OpenRouter free models failed or daily limit reached")
-
-
-class CerebrasProvider(BaseLLMProvider):
-    """
-    Cerebras Inference — Free tier, no credit card required.
-    Extremely fast inference (800+ tokens/sec) powered by Cerebras CS-3 chips.
-
-    Free tier: generous daily token limit, Llama 3.1 8B and 70B available.
-    Sign up (free) at: https://cloud.cerebras.ai/
-    API key format: csk-...
-    Docs: https://inference-docs.cerebras.ai/
-    """
-
-    BASE_URL = "https://api.cerebras.ai/v1"
-    # Models available on free tier
-    FREE_MODELS = [
-        "llama-3.3-70b",   # Best quality
-        "llama3.1-8b",     # Faster, lighter fallback
-    ]
-
-    def __init__(self):
-        self.api_key = getattr(settings, "cerebras_api_key", None) or ""
-
-    def is_available(self) -> bool:
-        return bool(self.api_key)
-
-    async def generate(self, prompt: str, **kwargs) -> str:
-        if not self.api_key:
-            raise ProviderUnavailableError("Cerebras API key not set")
-
-        for model in self.FREE_MODELS:
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(
-                        f"{self.BASE_URL}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": model,
-                            "messages": [{"role": "user", "content": prompt}],
-                            "max_tokens": kwargs.get("max_tokens", 1024),
-                            "temperature": kwargs.get("temperature", 0.7),
-                        },
-                    )
-                    if resp.status_code == 429:
-                        logger.warning(f"Cerebras rate limit for model {model}, trying next")
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    text = data["choices"][0]["message"]["content"].strip()
-                    if text:
-                        logger.info(f"Cerebras success with model: {model}")
-                        return text
-            except Exception as e:
-                logger.warning(f"Cerebras model {model} failed: {e}")
-                continue
-
-        raise ProviderUnavailableError("Cerebras models failed or rate-limited")
-
-
-
-class OllamaProvider(BaseLLMProvider):
-    """
-    Ollama local provider.
-    Completely FREE, runs locally.
-    """
-    
-    def __init__(self):
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
-        self._available = False
-        self._check_availability()
-    
-    def _check_availability(self):
-        """Check if Ollama is actually running."""
-        try:
-            import httpx
-            response = httpx.get(f"{self.base_url}/api/tags", timeout=2.0)
-            self._available = response.status_code == 200
-        except:
-            self._available = False
-    
-    def is_available(self) -> bool:
-        return self._available
-    
-    async def generate(self, prompt: str, **kwargs) -> str:
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{self.base_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "stream": False,
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["response"]
-                
-        except Exception as e:
-            logger.error(f"Ollama error: {e}")
-            raise ProviderUnavailableError(f"Ollama failed: {e}")
-
-
-class SimpleTemplateProvider(BaseLLMProvider):
-    """
-    Simple template-based provider.
-    ULTIMATE FALLBACK - no external API needed.
-    Uses templates and randomization for demo purposes.
-    """
-    
-    CAPTION_TEMPLATES = [
-        "✨ There's something magical about moments like these... {content} 🌟 What does this make you feel? Drop your thoughts below! 👇 #AestheticVibes #MoodBoard #Trending",
-        "🌸 In a world of chaos, find your peace... {content} � Tag someone who needs to see this beauty 💕 #VibezOnly #BeautifulMoments #Aesthetic",
-        "� Stop scrolling, you need to see this! {content} ✨ Double tap if this hits different � #InstaVibes #ContentCreator #Viral",
-        "� Life is all about these little wonders... {content} 🌿 What's your favorite way to appreciate beauty? 💭 #SlowLiving #Mindful #NatureLovers",
-        "⭐ Some things just speak to the soul... {content} 🎨 Save this for when you need a reminder ❤️ #DailyInspiration #AestheticFeed #ContentRoom",
-    ]
-    
-    SUMMARY_TEMPLATES = [
-        "This content discusses {topic}. Key points include the main ideas presented.",
-        "Summary: The content focuses on {topic} and provides valuable insights.",
-        "In brief: {topic} is the central theme with important takeaways.",
-    ]
-    
-    HASHTAGS = [
-        "#ContentRoom", "#AI", "#ContentCreation", "#Digital", "#Tech",
-        "#Innovation", "#Creative", "#Trending", "#Viral", "#Social",
-        "#Marketing", "#Growth", "#Engagement", "#Strategy", "#Success",
-    ]
-    
-    def is_available(self) -> bool:
-        return True  # Always available
-    
-    async def generate(self, prompt: str, **kwargs) -> str:
-        prompt_lower = prompt.lower()
-        
-        # Detect task type from prompt
-        if "caption" in prompt_lower:
-            # Extract content from prompt
-            content = self._extract_content(prompt)
-            
-            # Determine target length from max_tokens kwarg
-            max_tokens = kwargs.get("max_tokens", 256)
-            target_chars = max_tokens * 3  # rough estimate
-            
-            template = random.choice(self.CAPTION_TEMPLATES)
-            base_caption = template.format(content=content[:200])
-            
-            # If target is much larger than template, expand with more content
-            if target_chars > 500 and len(base_caption) < target_chars:
-                extras = [
-                    "\n\nThis is one of those moments that truly stays with you. The kind of experience that makes you pause and appreciate what life has to offer.",
-                    "\n\nThere's depth and beauty here that words can barely capture. Every detail tells its own story, and together they create something unforgettable.",
-                    "\n\nWhat stands out most is how every element comes together so perfectly. It's the little things that make the biggest impact.",
-                    "\n\nIf this resonated with you, share your own experience in the comments. Let's build a community of people who appreciate the extraordinary in the ordinary.",
-                    "\n\nRemember: every great story starts with a moment just like this one. Don't let these moments pass you by without soaking them in.",
-                ]
-                while len(base_caption) < target_chars and extras:
-                    base_caption += extras.pop(0)
-            
-            return base_caption[:target_chars] if target_chars < len(base_caption) else base_caption
-        
-        elif "summary" in prompt_lower or "summarize" in prompt_lower:
-            content = self._extract_content(prompt)
-            topic = content[:50] + "..." if len(content) > 50 else content
-            template = random.choice(self.SUMMARY_TEMPLATES)
-            return template.format(topic=topic)
-        
-        elif "hashtag" in prompt_lower:
-            count = 5
-            # Try to extract count from prompt
-            for word in prompt.split():
-                if word.isdigit():
-                    count = int(word)
-                    break
-            selected = random.sample(self.HASHTAGS, min(count, len(self.HASHTAGS)))
-            return "\n".join(selected)
-        
-        elif "rewrite" in prompt_lower or "tone" in prompt_lower:
-            content = self._extract_content(prompt)
-            if "professional" in prompt_lower:
-                return f"We are pleased to inform you that {content}"
-            elif "casual" in prompt_lower:
-                return f"Hey! Just wanted to share - {content} 😊"
-            elif "engaging" in prompt_lower:
-                return f"🔥 You won't believe this: {content}! 🚀"
-            return content
-        
-        elif "moderation" in prompt_lower or "safety" in prompt_lower:
-            # Return safe analysis
-            return """SAFETY_SCORE: 85
-FLAGS: none
-EXPLANATION: Content appears to be safe for publication."""
-        
-        else:
-            # Generic response
-            return f"Generated response for: {prompt[:100]}..."
-    
-    def _extract_content(self, prompt: str) -> str:
-        """Extract the main content from a prompt."""
-        # Look for content after common markers
-        markers = ["Content:", "content:", "Text:", "text:", "Original:"]
-        for marker in markers:
-            if marker in prompt:
-                parts = prompt.split(marker)
-                if len(parts) > 1:
-                    # Get content until next section or end
-                    content = parts[1].split("\n\n")[0].strip()
-                    return content
-        # Return last 200 chars if no marker found
-        return prompt[-200:].strip()
-
-
 # ===========================================
 # Main LLM Service with Fallback Chain
 # ===========================================
@@ -481,26 +235,94 @@ class LLMService:
     Priority:
       1. AWS Bedrock   (primary)
       2. Groq Cloud    (free, no CC — https://console.groq.com/)
-      3. OpenRouter    (free 50 req/day — https://openrouter.ai/)
-      5. Cerebras      (free tier — https://cloud.cerebras.ai/)
-      6. Ollama        (local / offline)
-      7. Simple Templates (always available, no API)
     """
 
     def __init__(self):
         self.providers: List[tuple[str, BaseLLMProvider]] = [
             (LLMProvider.AWS_BEDROCK, AWSBedrockProvider()),
             (LLMProvider.GROK,        GrokProvider()),
-            (LLMProvider.OPENROUTER,  OpenRouterProvider()),
-            (LLMProvider.CEREBRAS,    CerebrasProvider()),
-            (LLMProvider.OLLAMA,      OllamaProvider()),
-            (LLMProvider.SIMPLE,      SimpleTemplateProvider()),  # Ultimate fallback
         ]
 
         # Log available providers
         available = [name for name, p in self.providers if p.is_available()]
         logger.info(f"LLM providers available: {available}")
-    
+
+    _REASONING_TASK_PREFIXES = (
+        "calendar_",
+        "dna_",
+        "anti_cancel",
+        "mental_health",
+        "shadowban",
+        "pipeline_shadowban",
+        "signal_intel",
+        "rag_",
+        "burnout_",
+    )
+    _MICRO_TASKS = {"caption", "summary", "hashtags", "moderation"}
+
+    def _select_bedrock_model(self, task: str, max_tokens: int) -> str:
+        """
+        Task-aware Nova model routing:
+        - Micro: low-latency simple generation
+        - Lite: balanced default
+        - Nova 2 Lite: deeper reasoning / longer-context workflows
+        """
+        if task in self._MICRO_TASKS and max_tokens <= 512:
+            return settings.bedrock_model_id_micro
+        if task.startswith(self._REASONING_TASK_PREFIXES) or max_tokens >= 800:
+            return settings.bedrock_model_id_reasoning
+        return settings.bedrock_model_id
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        # Practical heuristic: ~4 chars/token for mixed English content.
+        return max(1, int(len(text or "") / 4))
+
+    def _estimate_cost_usd(self, provider: str, input_tokens: int, output_tokens: int) -> float:
+        if provider == LLMProvider.AWS_BEDROCK:
+            in_rate = settings.llm_cost_per_1k_input_tokens_bedrock
+            out_rate = settings.llm_cost_per_1k_output_tokens_bedrock
+        else:
+            in_rate = settings.llm_cost_per_1k_input_tokens_groq
+            out_rate = settings.llm_cost_per_1k_output_tokens_groq
+        return (input_tokens / 1000.0) * in_rate + (output_tokens / 1000.0) * out_rate
+
+    def _enforce_budgets(self, user_id: Optional[str]) -> None:
+        global_usage = get_analysis_repo().get_global_llm_usage()
+        if float(global_usage.get("llm_total_cost_usd", 0.0)) >= float(settings.llm_global_budget_usd):
+            raise AllProvidersFailedError("Usage exceeded: global LLM budget limit reached")
+
+        if user_id:
+            user_usage = get_users_repo().get_llm_usage(user_id)
+            if float(user_usage.get("llm_total_cost_usd", 0.0)) >= float(settings.llm_user_budget_usd):
+                raise AllProvidersFailedError("Usage exceeded: user LLM budget limit reached")
+
+    def _record_cost_usage(
+        self,
+        *,
+        user_id: Optional[str],
+        provider: str,
+        model: Optional[str],
+        task: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> float:
+        cost_usd = self._estimate_cost_usd(provider, input_tokens, output_tokens)
+        get_analysis_repo().increment_global_llm_usage(cost_usd, input_tokens, output_tokens)
+        if user_id:
+            get_users_repo().increment_llm_usage(user_id, cost_usd, input_tokens, output_tokens)
+        logger.info(
+            "llm_cost_event provider=%s model=%s task=%s user_id=%s input_tokens_est=%s output_tokens_est=%s cost_usd=%.6f",
+            provider,
+            model or "",
+            task,
+            user_id or "anonymous",
+            input_tokens,
+            output_tokens,
+            cost_usd,
+        )
+        return cost_usd
+
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=10))
     async def generate(
         self,
@@ -521,6 +343,10 @@ class LLMService:
         """
         errors = []
         fallback_used = False
+        user_id = kwargs.get("user_id")
+
+        # Budget guard before executing provider calls.
+        self._enforce_budgets(str(user_id) if user_id else None)
         
         for i, (name, provider) in enumerate(self.providers):
             if not provider.is_available():
@@ -528,11 +354,28 @@ class LLMService:
             
             try:
                 logger.info(f"Trying LLM provider: {name} for task: {task}")
-                text = await provider.generate(prompt, **kwargs)
+                provider_kwargs = dict(kwargs)
+                if name == LLMProvider.AWS_BEDROCK and "model" not in provider_kwargs:
+                    provider_kwargs["model"] = self._select_bedrock_model(
+                        task=task,
+                        max_tokens=int(provider_kwargs.get("max_tokens", 1024)),
+                    )
+                text = await provider.generate(prompt, task=task, **provider_kwargs)
+                input_tokens_est = self._estimate_tokens(prompt)
+                output_tokens_est = self._estimate_tokens(text)
+                self._record_cost_usage(
+                    user_id=str(user_id) if user_id else None,
+                    provider=name,
+                    model=provider_kwargs.get("model"),
+                    task=task,
+                    input_tokens=input_tokens_est,
+                    output_tokens=output_tokens_est,
+                )
                 
                 return {
                     "text": text,
                     "provider": name,
+                    "model": provider_kwargs.get("model"),
                     "fallback_used": fallback_used,
                 }
                 
@@ -542,7 +385,7 @@ class LLMService:
                 fallback_used = True
                 continue
         
-        # All providers failed (shouldn't happen with SimpleTemplateProvider)
+        # All providers failed
         error_msg = "; ".join(errors)
         logger.error(f"All LLM providers failed: {error_msg}")
         raise AllProvidersFailedError(f"All providers failed: {error_msg}")
@@ -552,7 +395,9 @@ class LLMService:
         content: str, 
         content_type: str = "text",
         max_length: int = 280,
-        platform: Optional[str] = None
+        platform: Optional[str] = None,
+        model: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate a platform-optimized caption for content.
         
@@ -625,9 +470,21 @@ Requirements:
 Content: {content}
 
 Write the caption now (no explanations, just the caption):"""
-        return await self.generate(prompt, task="caption", max_tokens=estimated_tokens)
+        return await self.generate(
+            prompt,
+            task="caption",
+            max_tokens=estimated_tokens,
+            model=model,
+            user_id=user_id,
+        )
     
-    async def generate_summary(self, content: str, max_length: int = 150) -> Dict[str, Any]:
+    async def generate_summary(
+        self,
+        content: str,
+        max_length: int = 150,
+        model: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Generate a summary of content.
         
         Args:
@@ -642,9 +499,15 @@ IMPORTANT: Keep the summary under {max_length} characters.
 Content: {content}
 
 Summary:"""
-        return await self.generate(prompt, task="summary")
+        return await self.generate(prompt, task="summary", model=model, user_id=user_id)
     
-    async def generate_hashtags(self, content: str, count: int = 5) -> Dict[str, Any]:
+    async def generate_hashtags(
+        self,
+        content: str,
+        count: int = 5,
+        model: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Generate hashtags for content."""
         prompt = f"""Generate {count} relevant hashtags for the following content.
 Return only the hashtags, each on a new line, starting with #.
@@ -653,7 +516,7 @@ Make them trending-friendly and discoverable.
 Content: {content}
 
 Hashtags:"""
-        result = await self.generate(prompt, task="hashtags")
+        result = await self.generate(prompt, task="hashtags", model=model, user_id=user_id)
         
         # Parse hashtags from response
         lines = result["text"].strip().split("\n")

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from routers.auth import CurrentUser, get_current_user
-from services.dynamo_repositories import get_content_repo
+from services.dynamo_repositories import get_content_repo, get_users_repo, get_analysis_repo
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,6 +35,18 @@ class ModerationStats(BaseModel):
     unsafe_count: int
     escalated_count: int
     average_safety_score: float
+
+
+class LLMUsageStats(BaseModel):
+    user_id: str
+    user_cost_usd: float
+    user_budget_usd: float
+    user_remaining_usd: float
+    user_call_count: int
+    global_cost_usd: float
+    global_budget_usd: float
+    global_remaining_usd: float
+    global_call_count: int
 
 
 @router.get("/dashboard", response_model=DashboardMetrics)
@@ -129,7 +141,7 @@ async def get_provider_stats():
         "scheduler_runtime_client_initialized": False,
         "aws_service_alignment_doc": "/Backend/AWS_SERVICE_ALIGNMENT.md",
         "fallback_chain": {
-            "llm": ["aws_bedrock", "grok", "openrouter", "ollama"],
+                "llm": ["aws_bedrock", "grok"],
             "vision": ["aws_rekognition", "simple_fallback"],
             "speech": ["aws_transcribe", "whisper"],
             "translation": ["aws_translate", "google_free"],
@@ -153,3 +165,29 @@ async def get_provider_stats():
             "cloudfront",
         ],
     }
+
+
+@router.get("/llm-usage", response_model=LLMUsageStats)
+async def get_llm_usage(current_user: CurrentUser = Depends(get_current_user)):
+    """Get authenticated user's LLM usage and global usage budgets."""
+    from config import settings
+
+    user_usage = get_users_repo().get_llm_usage(current_user.id)
+    global_usage = get_analysis_repo().get_global_llm_usage()
+
+    user_cost = float(user_usage.get("llm_total_cost_usd", 0.0))
+    global_cost = float(global_usage.get("llm_total_cost_usd", 0.0))
+    user_budget = float(settings.llm_user_budget_usd)
+    global_budget = float(settings.llm_global_budget_usd)
+
+    return LLMUsageStats(
+        user_id=current_user.id,
+        user_cost_usd=round(user_cost, 6),
+        user_budget_usd=round(user_budget, 2),
+        user_remaining_usd=round(max(0.0, user_budget - user_cost), 6),
+        user_call_count=int(user_usage.get("llm_call_count", 0)),
+        global_cost_usd=round(global_cost, 6),
+        global_budget_usd=round(global_budget, 2),
+        global_remaining_usd=round(max(0.0, global_budget - global_cost), 6),
+        global_call_count=int(global_usage.get("llm_call_count", 0)),
+    )

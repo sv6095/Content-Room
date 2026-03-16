@@ -1,11 +1,12 @@
 """
 Cultural Emotion Engine — Feature #1
-AWS Bedrock (Claude 3.5 Sonnet) + AWS Translate Primary
-Fallback: Gemini Pro API
+AWS Bedrock (Amazon Nova family) + AWS Translate Primary
+Fallback: Groq
 
 Rewrites content using regional emotional triggers for Bharat.
 """
 import logging
+import re
 from typing import Optional
 from config import settings
 from services.llm_service import get_llm_service
@@ -68,12 +69,60 @@ FESTIVAL_TONES = {
     "onam": "Kerala harvest, unity, simplicity, prosperity",
 }
 
+LANGUAGE_NAME_TO_CODE = {
+    "english": "en",
+    "hindi": "hi",
+    "telugu": "te",
+    "tamil": "ta",
+    "bengali": "bn",
+    "bangla": "bn",
+    "kannada": "kn",
+    "malayalam": "ml",
+    "gujarati": "gu",
+    "odia": "or",
+}
+
+TARGET_SCRIPT_PATTERNS = {
+    "hi": re.compile(r"[\u0900-\u097F]"),  # Devanagari
+    "te": re.compile(r"[\u0C00-\u0C7F]"),  # Telugu
+    "ta": re.compile(r"[\u0B80-\u0BFF]"),  # Tamil
+    "bn": re.compile(r"[\u0980-\u09FF]"),  # Bengali
+    "kn": re.compile(r"[\u0C80-\u0CFF]"),  # Kannada
+    "ml": re.compile(r"[\u0D00-\u0D7F]"),  # Malayalam
+    "gu": re.compile(r"[\u0A80-\u0AFF]"),  # Gujarati
+    "or": re.compile(r"[\u0B00-\u0B7F]"),  # Odia
+}
+
 
 def _looks_like_generic_fallback(text: str) -> bool:
     normalized = (text or "").strip().lower()
     if not normalized:
         return True
     return normalized.startswith("generated response for:")
+
+
+def _resolve_language_code(target_language: Optional[str]) -> Optional[str]:
+    if not target_language:
+        return None
+    raw = target_language.strip().lower()
+    if not raw:
+        return None
+    if raw in ("auto", "default", "auto (region default)"):
+        return None
+    if raw in LANGUAGE_NAME_TO_CODE:
+        return LANGUAGE_NAME_TO_CODE[raw]
+    if raw in LANGUAGE_NAME_TO_CODE.values():
+        return raw
+    return None
+
+
+def _requires_post_translation(text: str, target_code: Optional[str]) -> bool:
+    if not text or not target_code or target_code == "en":
+        return False
+    script_pattern = TARGET_SCRIPT_PATTERNS.get(target_code)
+    if script_pattern and script_pattern.search(text):
+        return False
+    return bool(re.search(r"[A-Za-z]", text))
 
 
 def _rule_based_rewrite(content: str, persona: dict, festival: Optional[str]) -> str:
@@ -180,38 +229,52 @@ async def rewrite_for_region(
         f"Use the natural language style of the region: {persona['language_style']}."
     )
 
-    prompt = f"""You are a master Bharat content strategist specializing in regional emotional adaptation.
+    prompt = f"""Role: Bharat content strategist for regional adaptation.
 
-Rewrite the following content for a creator targeting the **{region.title()}** audience.
-
+Target region: {region.title()}
 {lang_instruction}
 
-Regional Persona Profile:
+Persona:
 - Tone: {persona['tone']}
-- Language Style: {persona['language_style']}
-- Emotional Hooks to use: {', '.join(persona['hooks'])}
-- Strictly avoid: {', '.join(persona['avoid'])}
+- Style: {persona['language_style']}
+- Use hooks: {', '.join(persona['hooks'])}
+- Avoid: {', '.join(persona['avoid'])}
 {festival_context}
 {"Niche: " + content_niche if content_niche else ""}
 
-Original Content:
+Input:
 {content}
 
-Rewrite Rules:
-1. Keep the CORE MESSAGE identical — only adapt the emotional wrapper.
-2. Use the requested language naturally; do NOT translate mechanically.
-3. Start with a hook relevant to the region.
-4. Naturally incorporate at least 2 of the emotional hooks listed above.
-5. Do NOT add hashtags — the creator will add them separately.
-6. Return ONLY the rewritten content, no explanations.
-
-Rewritten Content:"""
+Rules:
+- Keep core message unchanged; adapt emotional framing only.
+- Start with a region-relevant hook.
+- Include at least 2 listed hooks naturally.
+- If target language is specified, write ONLY in that language (except unavoidable brand names/proper nouns).
+- No hashtags, no explanation.
+- Return only rewritten content.
+"""
 
     llm = get_llm_service()
-    result = await llm.generate(prompt, task="culture_emotion_engine", max_tokens=512)
+    result = await llm.generate(prompt, task="culture_emotion_engine", max_tokens=360)
     rewritten_text = result.get("text", "")
     if _looks_like_generic_fallback(rewritten_text):
         rewritten_text = _rule_based_rewrite(content, persona, festival)
+
+    target_lang_code = _resolve_language_code(target_language)
+    if _requires_post_translation(rewritten_text, target_lang_code):
+        try:
+            from services.translation_service import get_translation_service
+            translator = get_translation_service()
+            tx = await translator.translate(
+                text=rewritten_text,
+                target_lang=target_lang_code,
+                source_lang="en",
+            )
+            translated_text = (tx or {}).get("translated_text", "").strip()
+            if translated_text:
+                rewritten_text = translated_text
+        except Exception as e:
+            logger.warning("Culture language enforcement translation failed: %s", e)
 
     # ── Rule-Based Alignment Check (RL layer) ──────────────────────────────
     rule_data = _rule_alignment_score(rewritten_text, persona, festival)

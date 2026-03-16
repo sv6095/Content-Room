@@ -117,6 +117,56 @@ export interface HashtagsResponse {
   provider: string;
 }
 
+export interface TranscribeResponse {
+  text: string;
+  language: string;
+  provider: string;
+  fallback_used: boolean;
+  segments: Array<{ start?: number; end?: number; text?: string }>;
+}
+
+export interface ScriptResponse {
+  script: string;
+  script_type: string;
+  provider: string;
+  fallback_used: boolean;
+}
+
+export interface IdeasResponse {
+  ideas: string[];
+  provider: string;
+  fallback_used: boolean;
+}
+
+export interface MediaConvertJobResponse {
+  job_id: string;
+  status: string;
+  input_s3_uri?: string;
+  output_s3_uri?: string;
+  service: string;
+  error_message?: string;
+  output_group_details?: unknown[];
+}
+
+export interface NovaReelJobResponse {
+  invocation_arn: string;
+  status: string;
+  output_s3_uri?: string;
+  model_id?: string;
+  service: string;
+  failure_message?: string;
+  output_data_config?: unknown;
+}
+
+export interface ImageGenerationResponse {
+  prompt: string;
+  engine: string;
+  model_id: string;
+  image_url: string;
+  image_key?: string;
+  provider: string;
+}
+
 // Moderation Types
 export interface ModerationRequest {
   text: string;
@@ -154,12 +204,13 @@ export interface MultimodalModerationResponse {
 
 // Content (My Content pipeline) Types
 export interface ContentItem {
-  id: number;
+  id: string;
   content_type: string;
   original_text?: string;
   caption?: string;
   summary?: string;
   hashtags?: { items?: string[] } | string[];
+  file_path?: string;
   translated_text?: string;
   source_language?: string;
   target_language?: string;
@@ -188,13 +239,13 @@ export interface ScheduleRequest {
   scheduled_at: string;
   platform?: string;
   user_id?: number;
-  content_id?: number;
+  content_id?: number | string;
   media_url?: string;
   skip_moderation?: boolean;
 }
 
 export interface ScheduledPost {
-  id: number;
+  id: string;
   title: string;
   description?: string;
   scheduled_at: string;
@@ -235,6 +286,18 @@ export interface ProviderStats {
   };
   aws_configured: boolean;
   fallback_chain: Record<string, string[]>;
+}
+
+export interface LLMUsageStats {
+  user_id: string;
+  user_cost_usd: number;
+  user_budget_usd: number;
+  user_remaining_usd: number;
+  user_call_count: number;
+  global_cost_usd: number;
+  global_budget_usd: number;
+  global_remaining_usd: number;
+  global_call_count: number;
 }
 
 // Translation Types
@@ -360,34 +423,35 @@ export const authAPI = {
 // ============================================
 
 export const creationAPI = {
-  async generateCaption(content: string, contentType = 'text', maxLength?: number, platform?: string): Promise<GenerateResponse> {
+  async generateCaption(content: string, contentType = 'text', maxLength?: number, platform?: string, model?: string): Promise<GenerateResponse> {
     const response = await fetch(`${API_V1}/create/caption`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ 
         content, 
         content_type: contentType,
         max_length: maxLength,
-        platform: platform
+        platform: platform,
+        model: model,
       }),
     });
     return handleResponse<GenerateResponse>(response);
   },
 
-  async generateSummary(content: string, maxLength?: number): Promise<GenerateResponse> {
+  async generateSummary(content: string, maxLength?: number, model?: string): Promise<GenerateResponse> {
     const response = await fetch(`${API_V1}/create/summary`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, max_length: maxLength }),
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ content, max_length: maxLength, model }),
     });
     return handleResponse<GenerateResponse>(response);
   },
 
-  async generateHashtags(content: string, count = 5): Promise<HashtagsResponse> {
+  async generateHashtags(content: string, count = 5, model?: string): Promise<HashtagsResponse> {
     const response = await fetch(`${API_V1}/create/hashtags`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, count }),
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ content, count, model }),
     });
     return handleResponse<HashtagsResponse>(response);
   },
@@ -418,6 +482,63 @@ export const creationAPI = {
       body: formData,
     });
     return handleResponse(response);
+  },
+
+  async transcribeAudio(file: File, language?: string): Promise<TranscribeResponse> {
+    const formData = new FormData();
+    formData.append('audio', file);
+    if (language) {
+      formData.append('language', language);
+    }
+
+    const response = await fetch(`${API_V1}/create/transcribe`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: formData,
+    });
+    return handleResponse<TranscribeResponse>(response);
+  },
+
+  async generateScript(
+    topic: string,
+    scriptType = 'short_video',
+    tone = 'engaging',
+    durationSeconds = 60,
+    model?: string
+  ): Promise<ScriptResponse> {
+    const response = await fetch(`${API_V1}/create/script`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({
+        topic,
+        script_type: scriptType,
+        tone,
+        duration_seconds: durationSeconds,
+        model,
+      }),
+    });
+    return handleResponse<ScriptResponse>(response);
+  },
+
+  async generateIdeas(
+    niche: string,
+    audience = 'general',
+    platform = 'instagram',
+    count = 8,
+    model?: string
+  ): Promise<IdeasResponse> {
+    const response = await fetch(`${API_V1}/create/ideas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({
+        niche,
+        audience,
+        platform,
+        count,
+        model,
+      }),
+    });
+    return handleResponse<IdeasResponse>(response);
   },
 };
 
@@ -507,7 +628,7 @@ export const contentAPI = {
     return handleResponse<ContentItem[]>(response);
   },
 
-  async get(id: number): Promise<ContentItem> {
+  async get(id: number | string): Promise<ContentItem> {
     const response = await fetch(`${API_V1}/content/${id}`, {
       headers: getAuthHeaders(),
     });
@@ -521,6 +642,67 @@ export const contentAPI = {
       body: JSON.stringify(data),
     });
     return handleResponse<ContentItem>(response);
+  },
+};
+
+export const motionAPI = {
+  async startMediaConvert(file: File, outputPrefix = 'processed/video'): Promise<MediaConvertJobResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('output_prefix', outputPrefix);
+    const response = await fetch(`${API_V1}/media/motion/mediaconvert`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: formData,
+    });
+    return handleResponse<MediaConvertJobResponse>(response);
+  },
+
+  async getMediaConvertStatus(jobId: string): Promise<MediaConvertJobResponse> {
+    const response = await fetch(`${API_V1}/media/motion/mediaconvert/${jobId}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<MediaConvertJobResponse>(response);
+  },
+
+  async startNovaReel(prompt: string, durationSeconds = 6, aspectRatio = '16:9'): Promise<NovaReelJobResponse> {
+    const response = await fetch(`${API_V1}/media/motion/nova-reel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({
+        prompt,
+        duration_seconds: durationSeconds,
+        aspect_ratio: aspectRatio,
+      }),
+    });
+    return handleResponse<NovaReelJobResponse>(response);
+  },
+
+  async getNovaReelStatus(invocationArn: string): Promise<NovaReelJobResponse> {
+    const encoded = encodeURIComponent(invocationArn);
+    const response = await fetch(`${API_V1}/media/motion/nova-reel/status?invocation_arn=${encoded}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<NovaReelJobResponse>(response);
+  },
+
+  async generateImage(
+    prompt: string,
+    engine: 'titan' | 'nova_canvas' = 'titan',
+    width = 1024,
+    height = 1024
+  ): Promise<ImageGenerationResponse> {
+    const response = await fetch(`${API_V1}/media/image/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({
+        prompt,
+        engine,
+        width,
+        height,
+      }),
+    });
+    return handleResponse<ImageGenerationResponse>(response);
   },
 };
 
@@ -559,7 +741,7 @@ export const schedulerAPI = {
     return handleResponse(response);
   },
 
-  async listPosts(status?: string, platform?: string, userId = 1): Promise<ScheduledPost[]> {
+  async listPosts(status?: string, platform?: string, userId: number | string = 1): Promise<ScheduledPost[]> {
     const params = new URLSearchParams({ user_id: userId.toString() });
     if (status) params.append('status', status);
     if (platform) params.append('platform', platform);
@@ -570,12 +752,12 @@ export const schedulerAPI = {
     return handleResponse<ScheduledPost[]>(response);
   },
 
-  async getPost(postId: number): Promise<ScheduledPost> {
+  async getPost(postId: number | string): Promise<ScheduledPost> {
     const response = await fetch(`${API_V1}/schedule/${postId}`);
     return handleResponse<ScheduledPost>(response);
   },
 
-  async cancelPost(postId: number): Promise<{ message: string }> {
+  async cancelPost(postId: number | string): Promise<{ message: string }> {
     const response = await fetch(`${API_V1}/schedule/${postId}`, {
       method: 'DELETE',
     });
@@ -639,6 +821,13 @@ export const analyticsAPI = {
       headers: getAuthHeaders(),
     });
     return handleResponse<ProviderStats>(response);
+  },
+
+  async getLLMUsage(): Promise<LLMUsageStats> {
+    const response = await fetch(`${API_V1}/analytics/llm-usage`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<LLMUsageStats>(response);
   },
 };
 

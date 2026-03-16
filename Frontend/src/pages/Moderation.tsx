@@ -133,7 +133,17 @@ export default function Moderation() {
         );
         setResult(transformResult(apiResult, true));
       } else if (videoFile) {
-        setError('Video moderation is currently unavailable.');
+        const videoRes = await moderationAPI.moderateVideo(videoFile);
+        const decision = (videoRes as unknown as { decision?: string }).decision || 'ALLOW';
+        setResult({
+          explanation: (videoRes as unknown as { explanation?: string }).explanation || `Video "${videoFile.name}" analyzed.`,
+          flaggedContent: '',
+          flags: (videoRes as unknown as { flags?: string[] }).flags || [],
+          status: decisionToStatus(decision),
+          decision,
+          provider: (videoRes as unknown as { provider?: string }).provider,
+          processingTime: (videoRes as unknown as { processing_time_ms?: number }).processing_time_ms,
+        });
       } else if (imageFile) {
         // Image only
         const imageRes = await moderationAPI.moderateImage(imageFile);
@@ -382,7 +392,7 @@ export default function Moderation() {
                   <>
                     <Video className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground mb-2">Upload Video</p>
-                    <p className="text-xs text-muted-foreground mb-2">(Video moderation extracts frames for analysis)</p>
+                    <p className="text-xs text-muted-foreground mb-2">(Video moderation extracts sampled frames for analysis)</p>
                     <Button variant="outline" size="sm">Browse</Button>
                   </>
                 )}

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage, languages } from '@/contexts/LanguageContext';
 import { useToast } from '@/hooks/use-toast';
+import { analyticsAPI, APIError, type LLMUsageStats } from '@/services/api';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,7 +31,7 @@ import {
 export default function Settings() {
   const navigate = useNavigate();
   const { user, logout, updateProfile } = useAuth();
-  const { language, setLanguage } = useLanguage();
+  const { language, setLanguage, t, autoTranslateUI, setAutoTranslateUI } = useLanguage();
   const { toast } = useToast();
   
   // Profile state
@@ -48,11 +49,36 @@ export default function Settings() {
   // Notification state
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
+  const [llmUsage, setLlmUsage] = useState<LLMUsageStats | null>(null);
+  const [llmUsageLoading, setLlmUsageLoading] = useState(false);
 
   // Apply dark mode on mount and when isDarkMode changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadUsage = async () => {
+      setLlmUsageLoading(true);
+      try {
+        const usage = await analyticsAPI.getLLMUsage();
+        if (mounted) setLlmUsage(usage);
+      } catch (err) {
+        if (err instanceof APIError) {
+          console.warn('LLM usage fetch failed:', err.message);
+        } else {
+          console.warn('LLM usage fetch failed');
+        }
+      } finally {
+        if (mounted) setLlmUsageLoading(false);
+      }
+    };
+    void loadUsage();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleProfileSave = async () => {
     setIsProfileLoading(true);
@@ -89,9 +115,9 @@ export default function Settings() {
     <DashboardLayout>
       <div className="space-y-6 animate-fade-in max-w-3xl">
         <div>
-          <h2 className="text-2xl font-bold mb-2">Settings</h2>
+          <h2 className="text-2xl font-bold mb-2">{t('settings.title', 'Settings')}</h2>
           <p className="text-muted-foreground">
-            Manage your account and appearance.
+            {t('settings.subtitle', 'Manage your account and appearance.')}
           </p>
         </div>
 
@@ -99,16 +125,16 @@ export default function Settings() {
           <TabsList className="grid w-full grid-cols-3 mb-6">
             <TabsTrigger value="profile" className="flex items-center gap-2">
               <User className="h-4 w-4" />
-              <span className="hidden sm:inline">Profile</span>
+              <span className="hidden sm:inline">{t('settings.tabs.profile', 'Profile')}</span>
             </TabsTrigger>
             <TabsTrigger value="appearance" className="flex items-center gap-2">
               <Palette className="h-4 w-4" />
-              <span className="hidden sm:inline">Appearance</span>
+              <span className="hidden sm:inline">{t('settings.tabs.appearance', 'Appearance')}</span>
             </TabsTrigger>
 
             <TabsTrigger value="danger" className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4" />
-              <span className="hidden sm:inline">Account</span>
+              <span className="hidden sm:inline">{t('settings.tabs.account', 'Account')}</span>
             </TabsTrigger>
           </TabsList>
 
@@ -116,34 +142,34 @@ export default function Settings() {
           <TabsContent value="profile" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Personal Information</CardTitle>
-                <CardDescription>Update your account details</CardDescription>
+                <CardTitle className="text-lg">{t('settings.personalInfo', 'Personal Information')}</CardTitle>
+                <CardDescription>{t('settings.updateAccount', 'Update your account details')}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="profile-name">Full Name</Label>
+                  <Label htmlFor="profile-name">{t('settings.fullName', 'Full Name')}</Label>
                   <Input
                     id="profile-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Enter your name"
+                    placeholder={t('settings.fullName', 'Full Name')}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="profile-email">Email Address</Label>
+                  <Label htmlFor="profile-email">{t('settings.emailAddress', 'Email Address')}</Label>
                   <Input
                     id="profile-email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Enter your email"
+                    placeholder={t('settings.emailAddress', 'Email Address')}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="language">Interface Language</Label>
+                  <Label htmlFor="language">{t('settings.interfaceLanguage', 'Interface Language')}</Label>
                   <Select value={language} onValueChange={(value: typeof language) => setLanguage(value)}>
                     <SelectTrigger id="language" className="w-full sm:w-64">
-                      <SelectValue placeholder="Select language" />
+                      <SelectValue placeholder={t('settings.selectLanguage', 'Select language')} />
                     </SelectTrigger>
                     <SelectContent>
                       {languages.map((lang) => (
@@ -154,10 +180,63 @@ export default function Settings() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                  <div>
+                    <Label htmlFor="auto-translate-ui" className="text-sm font-medium">
+                      {t('settings.autoTranslateUI', 'Auto-translate entire interface (AWS)')}
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      {t('settings.autoTranslateUIDesc', 'Uses backend Translate API to translate visible UI labels across pages.')}
+                    </p>
+                  </div>
+                  <Switch
+                    id="auto-translate-ui"
+                    checked={autoTranslateUI}
+                    onCheckedChange={setAutoTranslateUI}
+                  />
+                </div>
                 <Button variant="hero" onClick={handleProfileSave} disabled={isProfileLoading}>
                   {isProfileLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Save Profile
+                  {t('settings.saveProfile', 'Save Profile')}
                 </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">LLM Usage & Budget</CardTitle>
+                <CardDescription>Track your LLM usage and remaining budget.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {llmUsageLoading ? (
+                  <div className="flex items-center text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Loading usage...
+                  </div>
+                ) : llmUsage ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-lg border p-3">
+                        <p className="text-xs text-muted-foreground mb-1">Your usage</p>
+                        <p className="text-sm font-semibold">${llmUsage.user_cost_usd.toFixed(4)}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Remaining: ${llmUsage.user_remaining_usd.toFixed(4)} / ${llmUsage.user_budget_usd.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Calls: {llmUsage.user_call_count}</p>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <p className="text-xs text-muted-foreground mb-1">Global usage</p>
+                        <p className="text-sm font-semibold">${llmUsage.global_cost_usd.toFixed(4)}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Remaining: ${llmUsage.global_remaining_usd.toFixed(4)} / ${llmUsage.global_budget_usd.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Calls: {llmUsage.global_call_count}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Usage data unavailable.</p>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

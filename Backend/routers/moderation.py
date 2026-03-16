@@ -3,9 +3,9 @@ Moderation Router for ContentOS
 
 Handles multimodal content moderation - NO AUTH REQUIRED.
 - Text moderation
-- Image moderation  
+- Image moderation
 - Audio moderation
-- Video moderation
+- Video moderation (frame extraction + per-frame analysis)
 
 Now saves results to database for analytics tracking.
 """
@@ -52,6 +52,16 @@ def get_moderation_status(decision: str) -> str:
     return "safe"
 
 
+def _safe_score(value: object, default: float = 100.0) -> float:
+    """Best-effort numeric safety score conversion for mixed provider payloads."""
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @router.post("/text", response_model=ModerationResponse)
 async def moderate_text(
     request: TextModerationRequest,
@@ -64,12 +74,16 @@ async def moderate_text(
     Saves results to database for analytics.
     """
     try:
+        normalized_text = (request.text or "").strip()
+        if not normalized_text:
+            raise HTTPException(status_code=400, detail="Text content is required for text moderation.")
+
         cache_repo = get_moderation_cache_repo()
-        text_hash = hashlib.sha256(request.text.encode("utf-8")).hexdigest()
+        text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
         cached = cache_repo.get(text_hash)
         result = cached.get("result") if cached and cached.get("result") else None
         if not result:
-            result = await moderation.moderate_text(request.text)
+            result = await moderation.moderate_text(normalized_text)
             cache_repo.put(text_hash, {"result": result, "flagged": result["decision"] != "ALLOW"})
         
         # Save to database for analytics (uses authenticated user if available)
@@ -81,7 +95,7 @@ async def moderate_text(
                         "record_type": "content",
                         "status": "moderated",
                         "content_type": "text",
-                        "original_text": request.text[:500],
+                        "original_text": normalized_text[:500],
                         "moderation_status": get_moderation_status(result["decision"]),
                         "safety_score": result.get("safety_score", 100),
                         "moderation_flags": result.get("flags", []),
@@ -202,10 +216,35 @@ async def moderate_video(
     Extracts frames and analyzes them for moderation.
     NO AUTHENTICATION REQUIRED.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="Video moderation is currently unavailable",
-    )
+    try:
+        video_bytes = await video.read()
+        result = await moderation.moderate_video(video_bytes)
+
+        # Save to database for analytics
+        try:
+            get_content_repo().create_content(
+                {
+                    "user_id": current_user.id if current_user else "anonymous",
+                    "record_type": "content",
+                    "status": "moderated",
+                    "content_type": "video",
+                    "original_text": f"Video: {video.filename}",
+                    "moderation_status": get_moderation_status(result["decision"]),
+                    "safety_score": result.get("safety_score", 100),
+                    "moderation_flags": result.get("flags", []),
+                    "moderation_explanation": result.get("explanation"),
+                }
+            )
+        except Exception as db_error:
+            logger.warning(f"Failed to save video moderation to DB: {db_error}")
+
+        return {
+            "filename": video.filename,
+            **result,
+        }
+    except Exception as e:
+        logger.error(f"Video moderation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/multimodal")
@@ -222,25 +261,26 @@ async def moderate_multimodal(
     results = {}
     overall_safety = 100
     all_flags = []
+    normalized_text = (text or "").strip()
     
-    if text:
-        text_result = await moderation.moderate_text(text)
+    if normalized_text:
+        text_result = await moderation.moderate_text(normalized_text)
         results["text"] = text_result
-        overall_safety = min(overall_safety, text_result["safety_score"])
+        overall_safety = min(overall_safety, _safe_score(text_result.get("safety_score")))
         all_flags.extend(text_result.get("flags", []))
     
     if image:
         image_bytes = await image.read()
         image_result = await moderation.moderate_image(image_bytes)
         results["image"] = image_result
-        overall_safety = min(overall_safety, image_result["safety_score"])
+        overall_safety = min(overall_safety, _safe_score(image_result.get("safety_score")))
         all_flags.extend(image_result.get("flags", []))
     
     if audio:
         audio_bytes = await audio.read()
         audio_result = await moderation.moderate_audio(audio_bytes, audio.filename)
         results["audio"] = audio_result
-        overall_safety = min(overall_safety, audio_result["safety_score"])
+        overall_safety = min(overall_safety, _safe_score(audio_result.get("safety_score")))
         all_flags.extend(audio_result.get("flags", []))
     
     if not results:

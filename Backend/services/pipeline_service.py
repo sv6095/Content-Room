@@ -116,7 +116,7 @@ async def run_preflight_pipeline(
                 "SHADOWBAN_SCORE: [0-100]\n"
                 "RECOMMENDATION: [one sentence]"
             )
-            res = await llm.generate(prompt, task="pipeline_shadowban", max_tokens=120)
+            res = await llm.generate(prompt, task="shadowban_predict", max_tokens=180)
             m = re.search(r"SHADOWBAN_SCORE:\s*(\d+)", res["text"], re.IGNORECASE)
             llm_score = int(m.group(1)) if m else 50
             final = min(95, int(llm_score * 0.70 + (100 - rule_score) * 0.30))

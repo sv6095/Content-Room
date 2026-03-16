@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     Priority Chain:
     1. AWS Services (primary)
     2. Groq API        — free tier, no CC  (https://console.groq.com/)
-    3. OpenRouter      — free 50 req/day   (https://openrouter.ai/)
-    4. Cerebras        — free tier          (https://cloud.cerebras.ai/)
-    5. Ollama / local models (offline mode)
     """
     
     # ===========================================
@@ -28,15 +25,23 @@ class Settings(BaseSettings):
     # ===========================================
     aws_region: str = Field(default="ap-south-1", alias="AWS_REGION")
     
-    # Amazon Bedrock — Primary LLM
-    # Claude 3 Sonnet: complex reasoning, agent workflows, cultural rewriting
-    bedrock_model_id: str = Field(
-        default="amazon.nova-lite-v1:0",
-        alias="BEDROCK_MODEL_ID"
+    # Amazon Bedrock — Primary LLM (Nova family)
+    # Supports task-aware routing across Micro, Lite, and Nova 2 Lite.
+    bedrock_model_id_micro: str = Field(
+        default="us.amazon.nova-micro-v1:0",
+        alias="BEDROCK_MODEL_ID_MICRO"
     )
-    bedrock_model_id_pro: str = Field(
-        default="amazon.nova-pro-v1:0",
-        alias="BEDROCK_MODEL_ID_PRO"
+    bedrock_model_id_lite: str = Field(
+        default="us.amazon.nova-lite-v1:0",
+        alias="BEDROCK_MODEL_ID_LITE"
+    )
+    bedrock_model_id: str = Field(
+        default="us.amazon.nova-lite-v1:0",
+        validation_alias=AliasChoices("BEDROCK_MODEL_ID", "BEDROCK_MODEL_ID_LITE")
+    )
+    bedrock_model_id_reasoning: str = Field(
+        default="us.amazon.nova-2-lite-v1:0",
+        alias="BEDROCK_MODEL_ID_REASONING"
     )
 
     # AWS Service Toggles
@@ -48,10 +53,21 @@ class Settings(BaseSettings):
     use_aws_sagemaker: bool = Field(default=True, alias="USE_AWS_SAGEMAKER")
     use_aws_dynamodb: bool = Field(default=True, alias="USE_AWS_DYNAMODB")
     use_aws_personalize: bool = Field(default=False, alias="USE_AWS_PERSONALIZE")
+    use_aws_mediaconvert: bool = Field(default=True, alias="USE_AWS_MEDIACONVERT")
+    use_aws_nova_reel: bool = Field(default=True, alias="USE_AWS_NOVA_REEL")
+    use_aws_titan_image: bool = Field(default=True, alias="USE_AWS_TITAN_IMAGE")
+    use_aws_nova_canvas: bool = Field(default=True, alias="USE_AWS_NOVA_CANVAS")
     
     # Amazon S3 (PRIMARY storage) — raw media, generated assets, processed files
     use_aws_s3: bool = Field(default=True, alias="USE_AWS_S3")
     aws_s3_region: str = Field(default="ap-south-1", alias="AWS_S3_REGION")
+    mediaconvert_endpoint: Optional[str] = Field(default=None, alias="MEDIACONVERT_ENDPOINT")
+    mediaconvert_role_arn: Optional[str] = Field(default=None, alias="MEDIACONVERT_ROLE_ARN")
+    mediaconvert_output_bucket: Optional[str] = Field(default=None, alias="MEDIACONVERT_OUTPUT_BUCKET")
+    nova_reel_model_id: str = Field(default="us.amazon.nova-reel-v1:0", alias="NOVA_REEL_MODEL_ID")
+    nova_reel_output_s3_uri: Optional[str] = Field(default=None, alias="NOVA_REEL_OUTPUT_S3_URI")
+    titan_image_model_id: str = Field(default="amazon.titan-image-generator-v2:0", alias="TITAN_IMAGE_MODEL_ID")
+    nova_canvas_model_id: str = Field(default="us.amazon.nova-canvas-v1:0", alias="NOVA_CANVAS_MODEL_ID")
     
     # Intelligence Feature Toggles (graceful fallback if False)
     enable_culture_engine: bool = Field(default=True, alias="ENABLE_CULTURE_ENGINE")
@@ -71,18 +87,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GROK_API_KEY", "GROQ_API_KEY"),
     )
+    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
+    llm_user_budget_usd: float = Field(default=20.0, alias="LLM_USER_BUDGET_USD")
+    llm_global_budget_usd: float = Field(default=180.0, alias="LLM_GLOBAL_BUDGET_USD")
+    llm_cost_per_1k_input_tokens_bedrock: float = Field(default=0.0008, alias="LLM_COST_PER_1K_INPUT_TOKENS_BEDROCK")
+    llm_cost_per_1k_output_tokens_bedrock: float = Field(default=0.0032, alias="LLM_COST_PER_1K_OUTPUT_TOKENS_BEDROCK")
+    llm_cost_per_1k_input_tokens_groq: float = Field(default=0.0006, alias="LLM_COST_PER_1K_INPUT_TOKENS_GROQ")
+    llm_cost_per_1k_output_tokens_groq: float = Field(default=0.0018, alias="LLM_COST_PER_1K_OUTPUT_TOKENS_GROQ")
 
-    # OpenRouter — free 50 req/day, no CC required
-    # Sign up at https://openrouter.ai/ and generate a free API key (sk-or-v1-...)
-    openrouter_api_key: Optional[str] = Field(default=None, alias="OPENROUTER_API_KEY")
-
-    # Cerebras — free tier, ultra-fast inference
-    # Sign up at https://cloud.cerebras.ai/ and generate a free API key (csk-...)
-    cerebras_api_key: Optional[str] = Field(default=None, alias="CEREBRAS_API_KEY")
-
-    ollama_base_url: str = Field(default="https://example-ollama-endpoint.com", alias="OLLAMA_BASE_URL")
-    ollama_model: str = Field(default="llama3", alias="OLLAMA_MODEL")
-    
     # ===========================================
     # Storage (S3 → Firebase → Local)
     # ===========================================
@@ -201,15 +213,13 @@ class Settings(BaseSettings):
     def llm_provider(self) -> str:
         """
         Determine the best available LLM provider.
-        Priority: AWS Bedrock (Claude 3 Sonnet) → Grok → OpenRouter → Ollama
+        Priority: AWS Bedrock (Nova family) → Groq
         """
         if self.use_aws_bedrock:
-            return "aws_bedrock"  # Uses bedrock_model_id (Claude 3 Sonnet)
+            return "aws_bedrock"
         if self.grok_api_key:
             return "grok"
-        if self.openrouter_api_key:
-            return "openrouter"
-        return "ollama"
+        return "none"
     
     @property
     def vision_provider(self) -> str:

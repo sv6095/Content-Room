@@ -69,7 +69,7 @@ Once content or a file is uploaded, you can trigger the following generators ind
 - Output hashtags are displayed as clickable chips and can be copied in one click.
 
 ### AI Media Analysis Mode
-When you upload an image, audio, or video file, you can toggle on **AI Media Analysis Mode**. In this mode, the AI analyzes the media file itself (not just your written description) to automatically extract understood content and then generate captions, summaries, and hashtags from that understanding. This means you can upload a photo and get a caption written for it — no text input needed.
+When you upload an image, audio, or video file, you can toggle on **AI Media Analysis Mode**. In this mode, the AI analyzes the media file itself (not just your written description) to automatically extract understood content and then generate captions, summaries, and hashtags from that understanding. This means you can upload a photo and get a caption written for it — no text input needed. For video, sampled frames are analyzed and merged into a generation context.
 
 ### Multi-Language Translation
 After generating your caption and summary, you can immediately translate the output into 8 major Indian languages with one click:
@@ -97,11 +97,11 @@ The Content Moderation module is a comprehensive safety analysis system that che
 - **Text** — Paste any caption, script, post, or body of text for safety analysis.
 - **Image** — Upload a photo or graphic file to be visually analyzed.
 - **Audio** — Upload a recording; it is first transcribed to text, then moderated.
-- **Video** — Upload a video clip; frames are extracted and analyzed visually.
+- **Video** — Upload a video clip; sampled frames are extracted and analyzed visually.
 - **Multimodal (combined)** — You can provide two or more of the above simultaneously for a combined analysis that cross-references all inputs.
 
 ### AI Provider Stack
-- **Primary**: AWS Rekognition for image and video moderation (frame-by-frame analysis).
+- **Primary**: AWS Rekognition for image moderation and sampled video frame moderation.
 - **AWS Transcribe**: Converts audio to text for transcription-based moderation.
 - **AWS Comprehend**: Performs sentiment analysis on text.
 - **LLM Fallback**: OpenAI, Groq, or OpenRouter models are used as fallbacks if AWS services are unavailable or quota is exceeded.
@@ -419,7 +419,7 @@ The Settings page gives logged-in users control over:
 The backend never relies on a single AI provider. A smart fallback chain is in place:
 
 1. **AWS Bedrock** (primary for many tasks)
-2. **AWS Rekognition** (primary for image/video moderation)
+2. **AWS Rekognition** (primary for image and video-frame moderation)
 3. **OpenAI GPT models** (primary for text generation and competitor analysis)
 4. **Groq** (fast inference fallback)
 5. **OpenRouter** (model routing fallback)
@@ -487,7 +487,7 @@ The frontend is built as a modern, responsive single-page application with a str
 | Database (prod) | PostgreSQL via asyncpg | Relational data at scale |
 | Database (dev) | SQLite via aiosqlite | Zero-setup local development |
 | Authentication | python-jose (JWT) + Argon2 | Secure stateless sessions |
-| AI (primary) | AWS Bedrock + Rekognition | Text generation, image/video moderation |
+| AI (primary) | AWS Bedrock + Rekognition | Text generation plus image/video-frame moderation |
 | AI (speech) | AWS Transcribe + Comprehend | Audio transcription and sentiment analysis |
 | AI (fallbacks) | OpenAI, Groq, OpenRouter | Redundant text generation providers |
 | HTTP client | aiohttp | Async external HTTP requests |
@@ -502,7 +502,7 @@ The backend exposes versioned RESTful endpoints under `/api/v1/`:
 | Module | Base Path | Key Operations |
 |---|---|---|
 | Auth | `/auth` | Register, Login, Profile, Logout |
-| Content Creation | `/create` | Caption, Summary, Hashtags, Rewrite, Extract+Generate |
+| Content Creation | `/create` | Caption, Summary, Hashtags, Rewrite, Extract+Generate (image/audio/video supported) |
 | Moderation | `/moderate` | Text, Image, Audio, Video, Multimodal |
 | Competitor | `/competitor` | Analyze URL |
 | Calendar | `/calendar` | Generate monthly plan |

@@ -1,7 +1,7 @@
 """
 One Idea → 12 Asset Explosion Engine — Feature #9
-AWS Bedrock (Claude 3.5 Sonnet) Primary
-Fallback: Groq → Gemini → Templates
+AWS Bedrock (Amazon Nova family) Primary
+Fallback: Groq
 
 Prompt chaining: 1 seed → 12 platform-native assets in parallel.
 """
@@ -241,16 +241,13 @@ async def _generate_single_asset(
     - quality_score = weighted blend of LLM baseline + rule compliance
     """
     asset = ASSET_PERSONAS[asset_key]
-    prompt = f"""You are: {asset['persona']}
+    prompt = f"""Role: {asset['persona']}
 Platform: {asset['platform']}
-{"Creator Niche: " + niche if niche else ""}
-
-Seed Idea / Core Content:
-{seed_content}
-
+{"Niche: " + niche if niche else ""}
+Input: {seed_content}
 Task: {asset['instructions']}
-
-Output (no explanations, no headers — just the content):"""
+Output: content only, no explanations.
+"""
 
     LLM_WEIGHT  = 0.65
     RULE_WEIGHT = 0.35

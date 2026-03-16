@@ -26,6 +26,13 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/
 
 const PLATFORMS = ["instagram", "facebook", "twitter", "youtube", "linkedin"];
 
+function resolveMediaUrl(mediaUrl: string): string {
+  if (!mediaUrl) return '';
+  if (/^https?:\/\//i.test(mediaUrl)) return mediaUrl;
+  if (mediaUrl.startsWith('/')) return `${API_BASE}${mediaUrl}`;
+  return `${API_BASE}/${mediaUrl}`;
+}
+
 // ─── Pre-Flight Report UI ─────────────────────────────────
 function ScorePill({
   label, value, color,
@@ -205,11 +212,7 @@ function PreFlightReport({
 export default function Scheduler() {
   const [searchParams] = useSearchParams();
   const contentIdParam = searchParams.get('contentId');
-  const contentId = useMemo(() => {
-    if (!contentIdParam) return undefined;
-    const n = parseInt(contentIdParam, 10);
-    return Number.isNaN(n) ? undefined : n;
-  }, [contentIdParam]);
+  const contentId = useMemo(() => contentIdParam || undefined, [contentIdParam]);
 
   const [posts, setPosts]                   = useState<ScheduledPost[]>([]);
   const [isLoading, setIsLoading]           = useState(true);
@@ -217,7 +220,7 @@ export default function Scheduler() {
   const [isSubmitting, setIsSubmitting]     = useState(false);
   const [isAnalyzing, setIsAnalyzing]       = useState(false);
   const [error, setError]                   = useState<string | null>(null);
-  const [deletingId, setDeletingId]         = useState<number | null>(null);
+  const [deletingId, setDeletingId]         = useState<string | null>(null);
   const [preflightReport, setPreflightReport] = useState<PreFlightResponse | null>(null);
   const [showApprovalForm, setShowApprovalForm] = useState(false);
 
@@ -319,7 +322,7 @@ export default function Scheduler() {
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     setDeletingId(id);
     try {
       await schedulerAPI.cancelPost(id);
@@ -630,7 +633,7 @@ export default function Scheduler() {
                           {post.media_url && (
                             <div className="flex items-center gap-1 ml-3 text-primary">
                               <Paperclip className="h-3 w-3" />
-                              <a href={`${API_BASE}${post.media_url}`} target="_blank" rel="noreferrer" className="hover:underline">
+                              <a href={resolveMediaUrl(post.media_url)} target="_blank" rel="noreferrer" className="hover:underline">
                                 Attachment
                               </a>
                             </div>

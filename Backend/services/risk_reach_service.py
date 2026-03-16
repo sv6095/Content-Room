@@ -1,7 +1,7 @@
 """
 Risk vs Reach Dial — Feature #2
 AWS Comprehend (Sentiment/Toxicity) + AWS Bedrock Primary
-Fallback: TextBlob + Gemini
+Fallback: TextBlob + Groq
 
 Multi-agent feedback loop:
 - Agent A: Generates content based on risk dial (0–100)
@@ -37,11 +37,11 @@ def _get_risk_prompt_instructions(risk_level: int) -> tuple[str, str]:
 - CTA should be urgent and FOMO-inducing."""
     else:
         tone = "VIRAL"
-        instructions = """- MAXIMUM IMPACT. Use bold, provocative, pattern-interrupting language.
-- Use "Negative Constraint" style: ignore generic PR safety. Create shock value.
-- The hook must be instantly shareable, even controversial.
-- Sentence rhythm: short. Punchy. Frequent line breaks. Like a punch to the face.
-- CTA: "This will change everything." Style urgency."""
+        instructions = """- MAXIMUM IMPACT. Use bold, surprising, pattern-interrupting language.
+- Use high-energy framing without violating platform policies.
+- The hook must be instantly shareable and emotionally strong, but not abusive or harmful.
+- Sentence rhythm: short, punchy, high momentum.
+- CTA should be urgent and actionable, but not manipulative spam."""
     return tone, instructions
 
 
@@ -109,23 +109,34 @@ async def generate_risk_reach_content(
     risk_level = max(0, min(100, risk_level))
     tone_label, instructions = _get_risk_prompt_instructions(risk_level)
 
-    prompt = f"""You are a strategic content creator calibrated for "{tone_label}" mode.
+    prompt = f"""Role: strategic content creator in {tone_label} mode.
 
-Original Content / Idea:
+Input:
 {content}
 
 {"Platform: " + platform if platform else ""}
 {"Niche: " + niche if niche else ""}
 
-Risk Dial Level: {risk_level}/100 ({tone_label} mode)
+Risk: {risk_level}/100
 
-Rewriting Instructions:
+Style Rules:
 {instructions}
 
-Generate the content now — one polished output, no commentary:"""
+Safety Rules (mandatory):
+- Keep core meaning intact.
+- No hate/harassment/threats/sexual-explicit abuse/self-harm/illegal guidance/violence.
+- No fabricated facts, endorsements, or legal/medical claims.
+- If input is unsafe, rewrite to compliant publishable content.
+
+Output Rules:
+- Return only final rewritten content.
+- Keep platform-friendly length (about 60-160 words unless short-form input).
+- Preserve input language unless explicitly requested otherwise.
+
+Write one polished output:"""
 
     llm = get_llm_service()
-    result = await llm.generate(prompt, task="risk_reach_dial", max_tokens=400)
+    result = await llm.generate(prompt, task="risk_reach_dial", max_tokens=280)
     generated_text = result["text"]
 
     # Run safety audit

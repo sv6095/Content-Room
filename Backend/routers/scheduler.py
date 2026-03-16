@@ -28,6 +28,7 @@ class ScheduleRequest(BaseModel):
     scheduled_at: datetime
     user_id: str = "1"
     content_id: Optional[str] = None  # Optionally link to a piece of content
+    platform: Optional[str] = None
 
 
 class ScheduleResponse(BaseModel):
@@ -44,6 +45,18 @@ class ScheduleResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    """
+    Parse ISO datetime strings robustly, including legacy 'Z' suffix values.
+    """
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        if value.endswith("Z"):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        raise
 
 
 @router.post("/", response_model=ScheduleResponse)
@@ -64,7 +77,7 @@ async def schedule_post(
             "title": request.title,
             "description": request.description,
             "scheduled_at": request.scheduled_at.isoformat(),
-            "platform": None,
+            "platform": request.platform,
             "status": "queued",
             "ai_optimized": False,
             "created_at": now,
@@ -76,12 +89,12 @@ async def schedule_post(
         id=post["content_id"],
         title=post["title"],
         description=post.get("description"),
-        scheduled_at=datetime.fromisoformat(post["scheduled_at"]),
+        scheduled_at=_parse_iso_datetime(post["scheduled_at"]),
         status=post.get("status", "queued"),
         platform=post.get("platform"),
         media_url=post.get("media_url"),
         ai_optimized=bool(post.get("ai_optimized", False)),
-        created_at=datetime.fromisoformat(post["created_at"]),
+        created_at=_parse_iso_datetime(post["created_at"]),
     )
 
 @router.post("/with-media")
@@ -138,12 +151,12 @@ async def schedule_post_with_media(
             id=post["content_id"],
             title=post["title"],
             description=post.get("description"),
-            scheduled_at=datetime.fromisoformat(post["scheduled_at"]),
+            scheduled_at=_parse_iso_datetime(post["scheduled_at"]),
             status=post.get("status", "queued"),
             platform=post.get("platform"),
             media_url=post.get("media_url"),
             ai_optimized=bool(post.get("ai_optimized", False)),
-            created_at=datetime.fromisoformat(post["created_at"]),
+            created_at=_parse_iso_datetime(post["created_at"]),
         ),
         "media": {"url": media_url, "filename": safe_filename},
         "moderation_passed": True
@@ -166,14 +179,15 @@ async def list_scheduled_posts(
             id=p["content_id"],
             title=p.get("title", ""),
             description=p.get("description"),
-            scheduled_at=datetime.fromisoformat(p["scheduled_at"]),
+            scheduled_at=_parse_iso_datetime(p["scheduled_at"]),
             status=p.get("status", "queued"),
             platform=p.get("platform"),
             media_url=p.get("media_url"),
             ai_optimized=bool(p.get("ai_optimized", False)),
-            created_at=datetime.fromisoformat(p["created_at"]),
+            created_at=_parse_iso_datetime(p["created_at"]),
         )
         for p in posts
+        if p.get("scheduled_at") and p.get("created_at")
     ]
 
 
@@ -189,12 +203,12 @@ async def get_scheduled_post(
         id=post["content_id"],
         title=post.get("title", ""),
         description=post.get("description"),
-        scheduled_at=datetime.fromisoformat(post["scheduled_at"]),
+        scheduled_at=_parse_iso_datetime(post["scheduled_at"]),
         status=post.get("status", "queued"),
         platform=post.get("platform"),
         media_url=post.get("media_url"),
         ai_optimized=bool(post.get("ai_optimized", False)),
-        created_at=datetime.fromisoformat(post["created_at"]),
+        created_at=_parse_iso_datetime(post["created_at"]),
     )
 
 

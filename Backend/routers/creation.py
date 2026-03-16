@@ -6,17 +6,19 @@ Handles AI-powered content generation - NO AUTH REQUIRED.
 - Summary creation
 - Hashtag suggestions
 - Tone rewriting
-- Media content extraction
+- Media content extraction (image/audio/video)
 """
 import logging
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Form, File, UploadFile
+from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Depends
 from pydantic import BaseModel
 
+from routers.auth import CurrentUser, get_current_user_optional
+from services.dynamo_repositories import get_users_repo
 from services.llm_service import get_llm_service, AllProvidersFailedError
 from services.vision_service import get_vision_service
-from services.speech_service import get_speech_service
+from services.speech_service import get_speech_service, SpeechError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,6 +35,7 @@ class GenerateRequest(BaseModel):
     language: str = "en"
     max_length: Optional[int] = None  # For caption/summary generation
     platform: Optional[str] = None  # Target platform: twitter, instagram, linkedin
+    model: Optional[str] = None  # Optional Nova model override
 
 
 class HashtagRequest(BaseModel):
@@ -41,6 +44,7 @@ class HashtagRequest(BaseModel):
     content_type: str = "text"
     language: str = "en"
     count: int = 5  # Number of hashtags to generate
+    model: Optional[str] = None  # Optional Nova model override
 
 
 class GenerateResponse(BaseModel):
@@ -56,16 +60,47 @@ class HashtagsResponse(BaseModel):
     provider: str
 
 
+class ScriptRequest(BaseModel):
+    """Request for script generation."""
+    topic: str
+    script_type: str = "short_video"  # short_video, ad_copy, voiceover, podcast_intro
+    tone: str = "engaging"
+    duration_seconds: int = 60
+    model: Optional[str] = None
+
+
+class IdeasRequest(BaseModel):
+    """Request for idea generation."""
+    niche: str
+    audience: str = "general"
+    platform: str = "instagram"
+    count: int = 8
+    model: Optional[str] = None
+
+
 class MediaExtractionResponse(BaseModel):
     """Response with extracted content and generated materials."""
     extracted_content: str
     caption: Optional[str] = None
+    summary: Optional[str] = None
     hashtags: Optional[List[str]] = None
     provider: str
 
 
+class TranscribeResponse(BaseModel):
+    """Response with speech-to-text transcript."""
+    text: str
+    language: str
+    provider: str
+    fallback_used: bool
+    segments: List[dict] = []
+
+
 @router.post("/caption", response_model=GenerateResponse)
-async def generate_caption(request: GenerateRequest):
+async def generate_caption(
+    request: GenerateRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """
     Generate an engaging caption for content.
     
@@ -81,7 +116,9 @@ async def generate_caption(request: GenerateRequest):
             request.content, 
             request.content_type,
             max_length=max_length,
-            platform=request.platform
+            platform=request.platform,
+            model=request.model,
+            user_id=current_user.id if current_user else None,
         )
         return GenerateResponse(
             result=result["text"],
@@ -93,7 +130,10 @@ async def generate_caption(request: GenerateRequest):
 
 
 @router.post("/summary", response_model=GenerateResponse)
-async def generate_summary(request: GenerateRequest):
+async def generate_summary(
+    request: GenerateRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """
     Generate a concise summary of content.
     NO AUTHENTICATION REQUIRED.
@@ -103,7 +143,12 @@ async def generate_summary(request: GenerateRequest):
     """
     try:
         max_length = request.max_length or 150  # Default summary length
-        result = await llm.generate_summary(request.content, max_length=max_length)
+        result = await llm.generate_summary(
+            request.content,
+            max_length=max_length,
+            model=request.model,
+            user_id=current_user.id if current_user else None,
+        )
         return GenerateResponse(
             result=result["text"],
             provider=result["provider"],
@@ -114,7 +159,10 @@ async def generate_summary(request: GenerateRequest):
 
 
 @router.post("/hashtags", response_model=HashtagsResponse)
-async def generate_hashtags(request: HashtagRequest):
+async def generate_hashtags(
+    request: HashtagRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """
     Generate relevant hashtags for content.
     NO AUTHENTICATION REQUIRED.
@@ -123,11 +171,90 @@ async def generate_hashtags(request: HashtagRequest):
         request: Hashtag generation request with count parameter (default: 5)
     """
     try:
-        result = await llm.generate_hashtags(request.content, request.count)
+        result = await llm.generate_hashtags(
+            request.content,
+            request.count,
+            model=request.model,
+            user_id=current_user.id if current_user else None,
+        )
         return HashtagsResponse(
             hashtags=result["hashtags"],
             provider=result["provider"],
         )
+    except AllProvidersFailedError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@router.post("/script")
+async def generate_script(
+    request: ScriptRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
+    """Generate creator scripts for ads, reels, voiceovers, and podcasts."""
+    prompt = f"""You are a senior creative copywriter.
+
+Create a {request.script_type} script on topic: {request.topic}
+Tone: {request.tone}
+Target duration: {request.duration_seconds} seconds
+
+Output requirements:
+- Write clear spoken-word style lines
+- Include a strong hook in first line
+- Include a CTA in the ending
+- Keep it production-ready with no extra commentary
+"""
+    try:
+        result = await llm.generate(
+            prompt,
+            task="script",
+            max_tokens=900,
+            model=request.model,
+            user_id=current_user.id if current_user else None,
+        )
+        return {
+            "script": result["text"],
+            "script_type": request.script_type,
+            "provider": result["provider"],
+            "fallback_used": result["fallback_used"],
+        }
+    except AllProvidersFailedError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@router.post("/ideas")
+async def generate_ideas(
+    request: IdeasRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
+    """Generate content ideas for creator planning and ideation."""
+    count = max(3, min(request.count, 20))
+    prompt = f"""Generate {count} fresh content ideas for:
+- Niche: {request.niche}
+- Audience: {request.audience}
+- Platform: {request.platform}
+
+Return only numbered ideas, one per line.
+Each idea must be practical and execution-ready for creators.
+"""
+    try:
+        result = await llm.generate(
+            prompt,
+            task="ideation",
+            max_tokens=800,
+            model=request.model,
+            user_id=current_user.id if current_user else None,
+        )
+        lines = [ln.strip() for ln in result["text"].splitlines() if ln.strip()]
+        ideas = []
+        for line in lines:
+            cleaned = line.lstrip("0123456789. -)").strip()
+            if cleaned:
+                ideas.append(cleaned)
+        return {
+            "ideas": ideas[:count],
+            "provider": result["provider"],
+            "fallback_used": result["fallback_used"],
+        }
     except AllProvidersFailedError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -139,6 +266,8 @@ async def extract_and_generate(
     video: Optional[UploadFile] = File(None),
     generate_caption: bool = Form(True),
     caption_max_length: int = Form(280),
+    generate_summary: bool = Form(True),
+    summary_max_length: int = Form(150),
     generate_hashtags: bool = Form(True),
     hashtag_count: int = Form(5),
 ):
@@ -198,10 +327,13 @@ async def extract_and_generate(
         
         # Extract from video (use first frame for now)
         if video:
-            raise HTTPException(
-                status_code=501,
-                detail="Video extraction is currently unavailable",
-            )
+            video_bytes = await video.read()
+            video_analysis = await vision.analyze_video(video_bytes)
+            labels = video_analysis.get("content_labels", [])
+            if labels:
+                label_text = ", ".join(labels[:12])
+                extracted_content += f"Video content: {label_text}. "
+                providers.append(video_analysis.get("provider", "vision_video"))
         
         if not extracted_content:
             raise HTTPException(
@@ -219,6 +351,16 @@ async def extract_and_generate(
             )
             caption_text = caption_result["text"]
             providers.append(caption_result["provider"])
+
+        # Generate summary if requested
+        summary_text = None
+        if generate_summary:
+            summary_result = await llm.generate_summary(
+                extracted_content,
+                max_length=summary_max_length
+            )
+            summary_text = summary_result["text"]
+            providers.append(summary_result["provider"])
         
         # Generate hashtags if requested
         hashtags_list = None
@@ -230,6 +372,7 @@ async def extract_and_generate(
         return MediaExtractionResponse(
             extracted_content=extracted_content.strip(),
             caption=caption_text,
+            summary=summary_text,
             hashtags=hashtags_list,
             provider=" + ".join(set(providers)),
         )
@@ -241,10 +384,64 @@ async def extract_and_generate(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe_audio(
+    audio: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
+    """
+    Transcribe uploaded audio into text.
+
+    Uses SpeechService fallback chain:
+    Whisper -> Google Speech -> simple fallback.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Login is required for voice actions",
+            )
+        allowed = get_users_repo().consume_feature_usage(
+            user_id=current_user.id,
+            feature="voice_generation",
+            limit=3,
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="Voice actions are limited to 3 per user in Creator Studio",
+            )
+
+        audio_bytes = await audio.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        transcript_result = await speech.transcribe_bytes(
+            audio_bytes,
+            audio.filename or "audio.wav",
+            language,
+        )
+
+        return TranscribeResponse(
+            text=transcript_result.get("text", "").strip(),
+            language=transcript_result.get("language", language or "en"),
+            provider=transcript_result.get("provider", "speech"),
+            fallback_used=bool(transcript_result.get("fallback_used", False)),
+            segments=transcript_result.get("segments", []),
+        )
+    except SpeechError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/rewrite")
 async def rewrite_tone(
     content: str = Form(...),
     tone: str = Form("professional"),  # professional, casual, engaging
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Rewrite content with a different tone.
@@ -258,7 +455,11 @@ Original: {content}
 Rewritten ({tone} tone):"""
     
     try:
-        result = await llm.generate(prompt, task="rewrite")
+        result = await llm.generate(
+            prompt,
+            task="rewrite",
+            user_id=current_user.id if current_user else None,
+        )
         return {
             "original": content,
             "rewritten": result["text"],

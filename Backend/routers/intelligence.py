@@ -223,7 +223,7 @@ async def predict_shadowban(request: ShadowbanRequest):
     """
     Predict shadowban probability using:
     1. Rule-engine pre-filter (fast keyword/pattern matching)
-    2. LLM deep analysis (Groq / Gemini / Bedrock via fallback chain)
+    2. LLM deep analysis (Bedrock with Groq fallback)
     """
     import re
     try:
@@ -268,35 +268,23 @@ async def predict_shadowban(request: ShadowbanRequest):
         platform = request.platform or "instagram"
         hashtag_str = ", ".join(request.hashtags) if request.hashtags else "none"
 
-        llm_prompt = f"""You are an expert social media algorithm analyst specializing in {platform} content policy and shadowban detection.
-
-Analyze this content for shadowban risk on {platform}:
-
-CONTENT:
-{request.content}
-
+        llm_prompt = f"""Role: {platform} algorithm risk analyst.
+CONTENT: {request.content}
 HASHTAGS: {hashtag_str}
+RULE_FLAGS: {rule_risk_factors if rule_risk_factors else ["None"]}
 
-RULE-ENGINE PRE-SCAN FLAGS (already detected):
-{rule_risk_factors if rule_risk_factors else ["None"]}
+Assess suppression risk from policy/spam/manipulation signals, bot-like patterns, hashtag quality, and over-promotion.
 
-Evaluate the content deeply on these criteria:
-1. Policy violations (spam signals, manipulative language, prohibited topics for {platform})
-2. Algorithmic suppression triggers specific to {platform}
-3. Bot-like patterns vs genuine creator voice
-4. Hashtag strategy quality and banned hashtag risk
-5. Over-promotion signals
-
-Respond in this EXACT format only:
+Reply in EXACT format:
 SHADOWBAN_SCORE: [0-100 integer]
-ADDITIONAL_RISK_FACTORS: [comma-separated new risks you found, or "none"]
-RISKY_HASHTAGS_FOUND: [comma-separated hashtags that are risky, or "none"]
+ADDITIONAL_RISK_FACTORS: [comma-separated risks or "none"]
+RISKY_HASHTAGS_FOUND: [comma-separated hashtags or "none"]
 RECOMMENDATION: [1-2 sentence actionable fix]
-ANALYSIS: [2-3 sentence expert explanation]"""
+ANALYSIS: [2-3 sentence explanation]"""
 
         from services.llm_service import get_llm_service
         llm = get_llm_service()
-        llm_result = await llm.generate(llm_prompt, task="shadowban_predict", max_tokens=400)
+        llm_result = await llm.generate(llm_prompt, task="shadowban_predict", max_tokens=260)
         llm_text = llm_result["text"]
         provider = llm_result["provider"]
 

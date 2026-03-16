@@ -26,7 +26,16 @@ Parameters:
     Default: content-room-frontend-125903111660
   BedrockModelId:
     Type: String
-    Default: amazon.nova-lite-v1:0
+    Default: us.amazon.nova-lite-v1:0
+  BedrockModelIdMicro:
+    Type: String
+    Default: us.amazon.nova-micro-v1:0
+  BedrockModelIdLite:
+    Type: String
+    Default: us.amazon.nova-lite-v1:0
+  BedrockModelIdReasoning:
+    Type: String
+    Default: us.amazon.nova-2-lite-v1:0
 
 Globals:
   Function:
@@ -53,6 +62,9 @@ Globals:
         FRONTEND_WEBSITE_URL: !Sub http://${FrontendBucketName}.s3-website.${AWS::Region}.amazonaws.com
         MEDIA_PRIVATE_ONLY: "true"
         BEDROCK_MODEL_ID: !Ref BedrockModelId
+        BEDROCK_MODEL_ID_MICRO: !Ref BedrockModelIdMicro
+        BEDROCK_MODEL_ID_LITE: !Ref BedrockModelIdLite
+        BEDROCK_MODEL_ID_REASONING: !Ref BedrockModelIdReasoning
         STEPFUNCTIONS_PREFLIGHT_ARN: ""
 
 Resources:

@@ -39,6 +39,7 @@ class ContentItem(BaseModel):
     caption: Optional[str] = None
     summary: Optional[str] = None
     hashtags: Optional[dict] = None
+    file_path: Optional[str] = None
     translated_text: Optional[str] = None
     source_language: Optional[str] = None
     target_language: Optional[str] = None
@@ -97,6 +98,7 @@ async def list_content(
             caption=c.get("caption"),
             summary=c.get("summary"),
             hashtags=c.get("hashtags"),
+            file_path=c.get("file_path"),
             translated_text=c.get("translated_text"),
             source_language=c.get("source_language"),
             target_language=c.get("target_language"),
@@ -135,6 +137,7 @@ async def get_content(
         caption=content.get("caption"),
         summary=content.get("summary"),
         hashtags=content.get("hashtags"),
+        file_path=content.get("file_path"),
         translated_text=content.get("translated_text"),
         source_language=content.get("source_language"),
         target_language=content.get("target_language"),
@@ -188,6 +191,7 @@ async def create_content(
         caption=content.get("caption"),
         summary=content.get("summary"),
         hashtags=content.get("hashtags"),
+        file_path=content.get("file_path"),
         translated_text=content.get("translated_text"),
         source_language=content.get("source_language"),
         target_language=content.get("target_language"),

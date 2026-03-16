@@ -8,7 +8,11 @@
 
 **India's First AI-Powered Content Workflow Platform for the Creator Economy**
 
+<<<<<<< HEAD
 *Hackathon Submission 2026
+=======
+*Hackathon Submission 2026  ·  Confidential*
+>>>>>>> 3bdd988 (Add image generation service)
 
 
 # **1. What Is Content Room?**
@@ -18,10 +22,10 @@ Content Room brings all of this together under one roof. The platform lets you g
 
 |**Core Thesis**|
 | :- |
-|India's 80M+ content creators operate in one of the world's most linguistically complex, culturally fragmented,|
-|and socially sensitive environments. A post that resonates in Tamil Nadu can be deeply offensive in Punjab.|
-|A caption that performs on Instagram can trigger a shadowban on YouTube. A creator burning out over months|
-|of overposting leaves measurable linguistic signals that no existing platform detects.|
+|India's 80M+ content creators operate in one of the world's most linguistically complex, culturally fragmented, and socially sensitive environments.|
+|A post that resonates in Tamil Nadu can be deeply offensive in Punjab.|
+|A caption that performs on Instagram can trigger a shadowban on YouTube.|
+|A creator burning out over months of overposting leaves measurable linguistic signals that most platforms fail to detect.|
 ||
 |Content Room was built to solve all of this — simultaneously — in one platform.|
 
@@ -36,7 +40,7 @@ Before Content Room, a professional Indian creator had to manage this workflow a
 |Competitor research|Manual browsing|Hours of manual work with no structured output|
 |Content calendar|Notion / Google Sheets|No AI generation, no festival awareness|
 |Scheduling|Buffer / Hootsuite|No pre-flight safety, no Indian language support|
-|Creator wellness|Nothing|No tool exists for this — world gap|
+|Creator wellness|Nothing|No tool exists for this — global gap|
 |Multi-platform repurposing|Manual rewriting|No simultaneous platform-specific adaptation|
 
 ## **1.2 The Content Room Solution**
@@ -49,20 +53,18 @@ Content Room collapses this 8-tool workflow into a single platform with 7 deeply
 
 # **2. Authentication & User System**
 
-|**No-Gate Philosophy**|
+|**Access Model**|
 | :- |
-|Most of Content Room's powerful features are completely accessible without creating an account.|
-|Creator Studio, Moderation, Competitor Intelligence, Content Calendar, Intelligence Hub, and Novel AI Lab|
-|all work without login. This reduces friction and lets creators start generating value immediately.|
-|Login unlocks: content history, scheduled post management, saved content library, and preferences.|
+|The backend supports optional-auth flows for several endpoints, while the current frontend experience is login-first for workspace modules.|
+|Authentication unlocks persistent user context, history, saved content, and usage tracking across sessions.|
 
 ## **2.1 Security Architecture**
 
 |**Security Layer**|**Technology**|**Detail**|
 | :- | :- | :- |
-|Session management|JWT (python-jose)|30-day default expiry — persistent, convenient sessions. Token auto-included in all API calls.|
+|Session management|JWT (python-jose)|Access tokens are issued through the auth service and attached to authenticated API calls.|
 |Password hashing|Argon2|Winner of the Password Hashing Competition. More secure than bcrypt or SHA-based approaches. All passwords hashed before storage.|
-|Cross-origin protection|CORS middleware|Backend only accepts requests from configured origins. Prevents cross-site request forgery.|
+|Cross-origin control|CORS middleware|Backend only accepts browser requests from configured origins. Helps reduce unauthorized cross-origin browser calls.|
 |SQL injection prevention|SQLAlchemy ORM|All database queries parameterized through ORM layer — no raw SQL construction.|
 |Input validation|Pydantic v2 schemas|All incoming API requests validated against strict schemas. Malformed data rejected before reaching business logic.|
 
@@ -74,6 +76,8 @@ Content Room collapses this 8-tool workflow into a single platform with 7 deeply
 |POST|/api/v1/auth/login|Validates credentials, returns JWT token|
 |GET|/api/v1/auth/profile|Returns logged-in user's profile data (auth required)|
 |POST|/api/v1/auth/logout|Invalidates the active session|
+
+# **3. Creator Studio**
 
 |**01**|**✨  Creator Studio**|
 | :-: | :- |
@@ -88,7 +92,7 @@ The workspace begins with choosing the content type being worked on. This select
 |Text|Blog posts, captions, news articles, scripts, social media copy|Analyzes written content directly for generation|
 |Image|Photos, infographics, design mockups|Visual analysis mode available — AI reads the image itself|
 |Audio|Podcasts, voice memos, recordings|Transcribed first, then analyzed for generation context|
-|Video|Reels, clips, tutorials, ads|Frame extraction + transcription for full context analysis|
+|Video|Reels, clips, tutorials, ads|Frame extraction + visual analysis for generation context|
 
 ## **3.2 AI Generation Tools**
 Once content or a file is uploaded, generators can be triggered individually or all at once with a single "Generate All" button:
@@ -120,10 +124,10 @@ Once content or a file is uploaded, generators can be triggered individually or 
 |content to generate captions, summaries, and hashtags from that understanding.|
 ||
 |This means: upload a photo → get a caption written for it. No text input required.|
-|Audio is transcribed first. Video frames are extracted and analyzed visually.|
+|Audio is transcribed first. Video frames are sampled and analyzed visually before generation.|
 
 ## **3.4 Multi-Language Translation**
-After generating caption and summary, one-click translation into 8 major Indian languages is available simultaneously:
+After generating caption and summary, one-click translation into 8 major Indian languages is available simultaneously (plus English source support):
 
 |**Language**|**Script**|**Region**|
 | :- | :- | :- |
@@ -141,6 +145,8 @@ Both the caption and summary are translated simultaneously. Translated text appe
 ## **3.5 Content Library**
 Any generated content can be saved to the personal content library (when logged in). The original text, generated caption, summary, and hashtags are stored together as a single content record. Direct navigation to the saved item is available from within the Studio.
 
+# **4. Content Moderation**
+
 |**02**|**🛡️  Content Moderation**|
 | :-: | :- |
 
@@ -150,22 +156,24 @@ The Content Moderation module is a comprehensive safety analysis system that che
 
 |**Modality**|**How It's Processed**|**AI Services Used**|
 | :- | :- | :- |
-|Text|Direct analysis of pasted text content|AWS Comprehend + LLM fallback|
+|Text|Direct analysis of pasted text content|AWS Comprehend + Bedrock/Groq fallback|
 |Image|Visual analysis of uploaded photo or graphic|AWS Rekognition (primary)|
 |Audio|Transcribed to text first, then moderated|AWS Transcribe → AWS Comprehend|
-|Video|Frames extracted and analyzed visually|AWS Rekognition (frame-by-frame)|
+|Video|Sampled frame extraction + per-frame moderation analysis|Aggregates frame-level safety into one verdict|
 |Multimodal|Two or more inputs analyzed simultaneously — results cross-referenced|All of the above in parallel|
 
 ## **4.2 AI Provider Stack**
 - Primary image/video: AWS Rekognition — production-grade NSFW, violence, and unsafe content detection.
 - Audio transcription: AWS Transcribe — converts audio to text for text-based moderation pipeline.
 - Text sentiment: AWS Comprehend — structured sentiment and toxicity scoring.
-- Fallback chain: OpenAI → Groq → OpenRouter — automatic failover if AWS services are unavailable or quota exceeded.
+- Fallback chain: AWS Bedrock → Groq (for text tasks), with service-specific fallbacks for vision/speech/translation.
 
 ## **4.3 Decision Output**
 
 |<p>**Three-Level Verdict**</p><p>✅ ALLOW — Content is safe for publishing</p><p>⚠️ FLAG — May violate policies; human review recommended</p><p>🚫 BLOCK — Definitively violates standards</p>|<p>**Supporting Detail Panel**</p><p>AI narrative explanation in plain English</p><p>Flagged items list (specific triggers)</p><p>Full audio transcript (if audio uploaded)</p><p>Processing time in milliseconds</p><p>Provider used (for transparency)</p>|
 | :- | :- |
+
+# **5. Competitor Intelligence**
 
 |**03**|**🔍  Competitor Intelligence**|
 | :-: | :- |
@@ -197,6 +205,8 @@ The Competitor Intelligence module is a deep strategic analysis system. Paste an
 
 - Ideas can be copied to clipboard instantly or sent directly to the Content Calendar with one click.
 
+# **6. Content Calendar**
+
 |**04**|**📅  Content Calendar**|
 | :-: | :- |
 
@@ -222,13 +232,15 @@ The Content Calendar generates a complete, month-long publishing plan tailored t
 |This pre-fills the calendar generation form with the discovered idea as a seed topic,|
 |creating a seamless pipeline from competitor research to your own content plan.|
 
+# **7. Content Scheduler**
+
 |**05**|**📡  Content Scheduler**|
 | :-: | :- |
 
-The Scheduler translates content planning into time-stamped publishing blueprints. Its defining feature is a mandatory Pre-Flight Analysis that runs before any item can be scheduled — ensuring nothing goes live that hasn't passed a 6-point AI safety review.
+The Scheduler translates content planning into time-stamped publishing blueprints. A dedicated Pre-Flight Pipeline is available and can be run before scheduling for a 6-point AI risk and quality review.
 
 ## **7.1 The Pre-Flight System — 6 Parallel AI Checks**
-Before scheduling anything, the system runs 6 AI checks in parallel on your content:
+When Pre-Flight is triggered, the system runs 6 AI checks in parallel on your content:
 
 |**#**|**Check**|**What It Detects**|**Output**|
 | :- | :- | :- | :- |
@@ -263,16 +275,18 @@ The pre-flight system is configured per submission — giving creators precise c
 |Sentiment: POSITIVE / NEUTRAL / NEGATIVE|
 |Quick Assets Generated: Count of spin-off variations ready to use|
 ||
-|Each section is expandable for full detail. After reviewing, the creator either:|
-|`  `✅ APPROVE — Content proceeds to scheduling (set title, date, time, optional media)|
-|`  `❌ DISCARD — Returns to editing with specific feedback on what to fix|
+|Each section is expandable for full detail. After reviewing, the creator can:|
+|✅ PROCEED — Continue to schedule with the pre-flight context in hand|
+|❌ REVISE — Return to editing with specific feedback on what to fix|
 
 Approved scheduled posts are displayed in a grouped calendar view organized by day.
+
+# **8. Intelligence Hub**
 
 |**06**|**⚡  Intelligence Hub**|
 | :-: | :- |
 
-The Intelligence Hub is a suite of 6 specialized strategic AI tools for creators who want to make data-driven content decisions. Each tab is an independent powerful capability; together they form a comprehensive creator intelligence layer.
+The Intelligence Hub is a suite of 7 specialized strategic AI tools for creators who want to make data-driven content decisions. Each tab is a standalone capability; together they form a comprehensive creator intelligence layer.
 
 ## **8.1 Tab 1: Culture Engine**
 Rewrites any piece of content so that it emotionally resonates with a specific regional audience in India.
@@ -299,7 +313,15 @@ Gives creators a Risk Dial (0–100 slider) to control how safe or provocative t
 
 Results show: Safety Score (passes moderation?), Estimated Engagement Probability (% chance of high engagement), and Moderation Risk (% chance of triggering platform flags).
 
-## **8.3 Tab 3: Anti-Cancel Shield**
+## **8.3 Tab 3: Content DNA Fingerprint**
+Analyzes voice consistency between a new draft and historical posts to detect style drift and brand misalignment.
+
+- Similarity score and drift severity to flag whether the new draft still sounds like the creator.
+- Content DNA traits summary to explain what stylistic signature the model detected.
+- Realignment suggestions with concrete edits to bring the draft back to the creator's core voice.
+- Works best with a strong post history sample for better signal quality.
+
+## **8.4 Tab 4: Anti-Cancel Shield**
 A reputational pre-screening tool specifically for Indian digital creators. Scans draft content for:
 
 - Flagged keywords categorized as CRITICAL (immediate action) or WARNING (review needed) severity, with category labels: hate speech, religious sensitivity, political danger, etc.
@@ -308,7 +330,7 @@ A reputational pre-screening tool specifically for Indian digital creators. Scan
 - Overall risk verdict: LOW, MEDIUM, or HIGH risk.
 - Critical threat alert: triggers if content contains violence, murder language, or hate speech that will almost certainly be actioned by platform Trust & Safety teams.
 
-## **8.4 Tab 4: Asset Explosion**
+## **8.5 Tab 5: Asset Explosion**
 Takes one idea and instantly generates 12 platform-native content assets in parallel:
 
 |**#**|**Asset Type**|**#**|**Asset Type**|
@@ -322,7 +344,7 @@ Takes one idea and instantly generates 12 platform-native content assets in para
 
 Each asset is optimized for its platform's format, character limit, tone, and audience expectations. Assets display in a 2-column grid with quality scores (0–100) and one-click copy buttons.
 
-## **8.5 Tab 5: Mental Health Meter**
+## **8.6 Tab 6: Mental Health Meter**
 Analyzes a creator's recent post history to detect early signs of burnout using linguistic entropy analysis. Paste 3 or more recent posts (separated by ---). Output includes:
 
 - Burnout Score (0–100): Higher score = more burnout signals detected.
@@ -331,7 +353,7 @@ Analyzes a creator's recent post history to detect early signs of burnout using 
 - Sentiment Trend: Shows whether the creator's emotional tone is declining over time.
 - Personalized recommendations: Specific advice calibrated to the creator's current mental state.
 
-## **8.6 Tab 6: Shadowban Predictor**
+## **8.7 Tab 7: Shadowban Predictor**
 Analyzes content before posting to estimate the likelihood of algorithmic suppression on Instagram, Facebook, Twitter/X, or YouTube. Returns:
 
 - Shadowban Probability: Exact percentage.
@@ -340,6 +362,8 @@ Analyzes content before posting to estimate the likelihood of algorithmic suppre
 - Risky Hashtags: Individual hashtags flagged as potentially shadowban-triggering.
 - AI Deep Analysis: Full narrative explanation of why the risk exists.
 - Recommendation: Specific actions to reduce shadowban risk before posting.
+
+# **9. Novel AI Lab**
 
 |**07**|**🚀  Novel AI Lab**|
 | :-: | :- |
@@ -402,7 +426,7 @@ A more advanced version of the Mental Health Meter that goes beyond diagnosis to
 |Self-Evolving Weekly Schedule|Complete AI-generated schedule matching your current capacity — specific days, times, and content types|
 
 # **10. Data Storage & Content Library**
-All generated and processed content is stored in the database when users are logged in, using SQLAlchemy's async engine for high concurrency without blocking. The database switches automatically between PostgreSQL (production) and SQLite (development) based on environment configuration.
+Generated and processed content is stored when users are logged in. The backend uses SQLAlchemy's async engine for high concurrency without blocking and switches between PostgreSQL (production) and SQLite (development) based on environment configuration.
 
 ## **10.1 Content Record Schema**
 
@@ -429,39 +453,28 @@ All generated and processed content is stored in the database when users are log
 |moderation\_passed|boolean|Whether pre-flight analysis was passed|
 |media\_url|string|Optional attached media file URL in S3|
 
-# **11. Social Platform Integration & Settings**
-## **11.1 Social Platform Connections**
-OAuth and API connection infrastructure is provided for three major platforms. Connection status for all linked platforms is viewable from the Settings page via the /api/v1/social/status endpoint:
-
-|**Platform**|**Connection Type**|**Capability**|
-| :- | :- | :- |
-|Twitter/X|OAuth + API credentials|Connect and publish directly from the Scheduler|
-|Instagram|OAuth URL generation|Account connection for scheduled publishing|
-|LinkedIn|OAuth URL generation|Account connection for scheduled publishing|
-
-## **11.2 Settings Page**
+# **11. Settings**
+## **11.1 Settings Page**
 - Profile: Update display name and email address.
 - Theme: Toggle between Dark Mode and Light Mode — class-based theming with smooth transitions and full coverage.
 - Language: Choose the interface language preference.
-- Platform Connections: Link and manage connected social media accounts.
+- Account experience is centered on user preferences and workspace behavior.
 
 # **12. AI Provider Fallback System**
-The backend never relies on a single AI provider. A smart fallback chain is in place — if any provider fails (quota exceeded, timeout, error), the system automatically retries the next provider in the chain, ensuring near-zero downtime for users and graceful degradation:
+The backend does not rely on a single AI provider. If a provider fails (quota exceeded, timeout, or transient error), the service retries with the next compatible provider in the chain to preserve uptime and degrade gracefully:
 
-|**Fallback Chain (in order)**|
+|**Fallback Chain (logical order)**|
 | :- |
 |1\. AWS Bedrock — primary for most text generation tasks|
-|2\. AWS Rekognition — primary for image and video moderation|
-|3\. OpenAI GPT models — primary for text generation and competitor analysis fallback|
-|4\. Groq — fast inference fallback when OpenAI is unavailable|
-|5\. OpenRouter — model routing fallback as final catch-all|
+|2\. Groq — fast text-generation fallback when Bedrock is unavailable|
+|3\. AWS Rekognition / Comprehend / Translate / Transcribe — service-specific primary models with graceful local/free fallbacks where implemented|
 ||
 |Automatic retry logic triggers on: quota exceeded, timeout, 5xx errors, model unavailability.|
-|Fallback selection is invisible to the user — the experience remains consistent regardless of which provider serves the request.|
+|Fallback routing is invisible to the user — the experience remains consistent regardless of which provider serves the request.|
 
 # **13. Performance Architecture**
 ## **13.1 Backend Performance**
-- Async/Await throughout: Every database call, external API call, and file operation uses Python's asyncio. Thousands of simultaneous users can be served without thread blocking.
+- Async/await throughout: Every database call, external API call, and file operation uses Python's asyncio. Thousands of simultaneous users can be served without thread blocking.
 - Parallel AI calls: Tasks requiring multiple AI results (caption + summary + hashtags simultaneously, all 6 pre-flight checks at once) fire all API calls in parallel — not sequentially.
 - Connection pooling: Database connection pool managed by SQLAlchemy's async engine, reusing connections efficiently across concurrent requests.
 - Rate limiting: Built-in protection prevents any single user or IP from overwhelming the API — prevents abuse and ensures fair access.
@@ -508,13 +521,13 @@ The backend never relies on a single AI provider. A smart fallback chain is in p
 |Database ORM|SQLAlchemy (async)|Type-safe async database operations|
 |Database (prod)|PostgreSQL via asyncpg|Relational data at scale with async driver|
 |Database (dev)|SQLite via aiosqlite|Zero-setup local development environment|
-|Authentication|python-jose (JWT) + Argon2|Secure 30-day stateless sessions with modern password hashing|
+|Authentication|python-jose (JWT) + Argon2|Secure token-based sessions with modern password hashing|
 |AI — primary generation|AWS Bedrock (Nova Lite/Pro)|Text generation, cultural rewriting, competitor analysis|
-|AI — image/video safety|AWS Rekognition|Frame-level NSFW and violence detection|
+|AI — image safety|AWS Rekognition|Image moderation and label detection in production paths|
 |AI — audio|AWS Transcribe + Comprehend|Speech-to-text + sentiment and toxicity analysis|
 |AI — translation|AWS Translate|Multilingual caption adaptation across 8+ Indian languages|
 |AI — orchestration|AWS Step Functions|Parallel pre-flight pipeline with retries and timeouts|
-|AI — fallbacks|OpenAI, Groq, OpenRouter|Redundant text generation providers — automatic failover|
+|AI — text fallback|Groq|Fallback text generation provider when Bedrock fails or is unavailable|
 |Scheduling|AWS EventBridge|Persistent serverless content publication scheduling|
 |Storage|AWS S3|Media file storage with presigned URL direct upload|
 |Database (cloud)|AWS DynamoDB|AI response caching and analysis result storage|
@@ -528,15 +541,16 @@ The backend exposes versioned RESTful endpoints under /api/v1/:
 |**Module**|**Base Path**|**Key Operations**|
 | :- | :- | :- |
 |Auth|/auth|Register, Login, Profile, Logout|
-|Content Creation|/create|Caption, Summary, Hashtags, Rewrite, Media Extract+Generate|
+|Content Creation|/create|Caption, Summary, Hashtags, Rewrite, Media Extract+Generate (image/audio/video supported)|
 |Moderation|/moderate|Text, Image, Audio, Video, Multimodal combined|
 |Competitor|/competitor|Analyze any public URL with niche context|
 |Calendar|/calendar|Generate monthly content plan with festival integration|
 |Scheduler|/schedule|List, Create, Delete scheduled posts; Pre-flight pipeline|
-|Social|/social|Platform status, Twitter / Instagram / LinkedIn OAuth connect|
-|Intelligence|/intelligence|Culture Engine, Risk vs Reach, Anti-Cancel, Asset Explosion, Mental Health, Shadowban|
+|Media|/media|Motion workflows and image generation endpoints|
+|Content|/content|Stored content records and content-pipeline resources|
+|Intelligence|/intel|Culture Engine, Risk vs Reach, DNA, Anti-Cancel, Asset Explosion, Mental Health, Shadowban|
 |Novel AI Lab|/novel|Signal Intelligence, Trend Injection, Multimodal Production, Platform Adapter, Burnout Predictor|
-|Translation|/translation|Text translation to any supported language|
+|Translation|/translate|Text translation to supported languages|
 |History|/history|User content history (authentication required)|
 |Pipeline|/pipeline|Run full pre-flight analysis as a single endpoint|
 |Analytics|/analytics|Usage analytics and performance data|
@@ -546,9 +560,9 @@ The backend exposes versioned RESTful endpoints under /api/v1/:
 |**Architecture Philosophy**|
 | :- |
 |Content Room follows three architectural principles:|
-|`  `1. Serverless-first: Zero infrastructure management — scales from 0 to 10M users without provisioning a server.|
-|`  `2. Event-driven: Every component responds to events — no polling, no idle costs, no wasted compute.|
-|`  `3. AI-native: Every layer is designed to carry AI workloads — from CDN edge to database cache layer.|
+|1. Serverless-first: Zero infrastructure management — scales from 0 to 10M users without provisioning a server.|
+|2. Event-driven: Every component responds to events — no polling, no idle costs, no wasted compute.|
+|3. AI-native: Every layer is designed to carry AI workloads — from CDN edge to database cache layer.|
 
 ## **16.1 Frontend: React + Vite on S3 + CloudFront**
 - Static Hosting Eliminates Server Cost: React app deployed as static files to S3. No web servers to manage, patch, or scale. Costs fractions of a cent per GB.
@@ -583,7 +597,7 @@ The backend exposes versioned RESTful endpoints under /api/v1/:
 ## **16.7 Generative AI: Amazon Bedrock (Nova Lite / Nova Pro)**
 - Nova Lite: Optimized for high-throughput, low-latency inference. Used for caption generation, hashtag suggestions, and cultural rewrites in the real-time pipeline.
 - Nova Pro: Deeper reasoning for competitor analysis synthesis, campaign planning, and multi-step cultural adaptation.
-- No Data Off-AWS: Unlike OpenAI or external Anthropic API, Bedrock keeps all inference within the AWS VPC — protecting creators' intellectual property.
+- AWS-first data path: Bedrock keeps primary inference within AWS, helping protect creators' intellectual property and simplify compliance boundaries.
 
 ## **16.8 Remaining AWS Services**
 
@@ -635,7 +649,7 @@ The backend exposes versioned RESTful endpoints under /api/v1/:
 | :- | :- | :- | :- |
 |Freemium|₹0/month|10 pre-flight analyses/month, basic text moderation|New creators, trial users|
 |Creator Pro|₹499/month|Unlimited pre-flight, full Bharat Layer, Burnout Predictor, Competitor Intelligence|Monetized 10K-500K creators|
-|Creator Studio|₹1,999/month|Everything in Pro + API access, team collaboration, campaign planner, custom personas|Professional creators, agencies|
+|Creator Scale|₹1,999/month|Everything in Pro + API access, team collaboration, campaign planner, custom personas|Professional creators, agencies|
 |Brand/Agency|₹9,999+/month|White-label dashboard, multi-creator management, custom moderation rules, dedicated support|Talent agencies, brand teams|
 
 ## **18.3 Unit Economics**
@@ -650,7 +664,7 @@ The backend exposes versioned RESTful endpoints under /api/v1/:
 
 ## **18.4 Defensibility Moats**
 - Data Moat: Every analysis generates training data. After 1M analyses, Content Room's cultural models are trained on more Indian creator content than any competitor could acquire.
-- Language Infrastructure Lead: Supporting 9 Indian languages with cultural post-processing is a 12-18 month engineering project for any competitor starting from zero.
+- Language Infrastructure Lead: Supporting 8 major Indian languages (+ English) with cultural post-processing is a 12-18 month engineering project for any competitor starting from zero.
 - First-Mover Creator Trust: Moderation and wellness prediction require creators to trust the platform with sensitive content. Trust is earned slowly and lost instantly.
 - Network Effects: The Competitor Intelligence feature improves as more creators use it — more creators = better benchmarks = more valuable intelligence for each user.
 - AWS Partnership Potential: As a flagship India-focused AI application on AWS, Content Room is a candidate for AWS Activate credits and AWS Marketplace listing.
@@ -661,16 +675,16 @@ The backend exposes versioned RESTful endpoints under /api/v1/:
 | :- |
 |Content Room is a full-stack AI-powered content workflow platform built for India's 80M+ creator economy.|
 |The platform features 7 integrated modules: Creator Studio, Content Moderation, Competitor Intelligence,|
-|Content Calendar, Content Scheduler with Pre-Flight Analysis, Intelligence Hub (6 specialized tools),|
+|Content Calendar, Content Scheduler with optional Pre-Flight Analysis, Intelligence Hub (7 specialized tools),|
 |and Novel AI Lab (5 multi-agent and RAG-powered tools).|
 ||
-|Built on a fully serverless AWS architecture using Amazon S3, CloudFront, API Gateway, Lambda,|
+|Built on a serverless AWS architecture using Amazon S3, CloudFront, API Gateway, Lambda,|
 |Step Functions, DynamoDB, Bedrock (Nova Lite/Pro), Rekognition, Comprehend, Translate, Transcribe,|
 |EventBridge, and CloudWatch — 13 AWS services, zero servers.|
 ||
 |The Pre-Flight Pipeline runs 6 AI checks in parallel (Anti-Cancel Shield, Shadowban Prediction,|
 |Culture Adaptation, Content Safety, Mental Health Tone Analysis, and Asset Spin-offs) before any|
-|content is scheduled. The world-first Creator Burnout Predictor uses linguistic entropy analysis to|
+|content is scheduled. The Creator Burnout Predictor uses linguistic entropy analysis to|
 |detect burnout weeks before creators recognize it themselves.|
 ||
 |The Bharat Intelligence Layer covers 6 Indian city personas, 9 languages with transliteration,|

@@ -16,6 +16,16 @@ from services.speech_service import get_speech_service
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    """Convert provider values to float safely."""
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ModerationDecision(str, Enum):
     ALLOW = "ALLOW"
     FLAG = "FLAG"
@@ -240,7 +250,7 @@ EXPLANATION: [clear explanation]
 
         prefilter = await self.prefilter_image(image_bytes)
         analysis = await self.analyze_image(image_bytes)
-        safety_score = float(analysis.get("safety_score", 0))
+        safety_score = _safe_float(analysis.get("safety_score"), 0.0)
         raw_flags = analysis.get("flags", [])
         if raw_flags and isinstance(raw_flags[0], dict):
             flags = [f.get("name", "") for f in raw_flags if f.get("name")]
@@ -297,6 +307,36 @@ EXPLANATION: [clear explanation]
             "flagged_segments": flagged_segments,
             "provider": analysis["provider"],
             "processing_time_ms": processing_time,
+        }
+
+    async def moderate_video(self, video_bytes: bytes) -> Dict[str, Any]:
+        start_time = datetime.now()
+        analysis = await self.vision.analyze_video(video_bytes)
+        safety_score = _safe_float(analysis.get("safety_score"), 50.0)
+        flags = [str(f) for f in analysis.get("flags", []) if f]
+        decision = self.make_decision(safety_score, flags)
+        processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+
+        video_info = analysis.get("video_info", {})
+        frame_results = analysis.get("frame_results", [])
+        providers = analysis.get("provider_chain", [])
+
+        return {
+            "decision": decision.value,
+            "safety_score": safety_score,
+            "confidence": 0.85 if providers else 0.7,
+            "explanation": (
+                f"Video analyzed across {video_info.get('frames_analyzed', 0)} frame(s); "
+                f"{len(flags)} moderation flag(s) detected."
+            ),
+            "flags": flags,
+            "content_labels": analysis.get("content_labels", []),
+            "provider": analysis.get("provider", "video_frame_pipeline"),
+            "provider_chain": providers,
+            "video_info": video_info,
+            "frame_results": frame_results,
+            "processing_time_ms": processing_time,
+            "fallback_used": analysis.get("fallback_used", False),
         }
 
 

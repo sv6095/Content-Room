@@ -96,17 +96,18 @@ async def analyze_mental_health(
 
     # LLM advisory
     llm = get_llm_service()
-    advisory_prompt = f"""You are a creator wellness advisor. Based on this analysis:
-- Burnout Score: {burnout_score}/100
-- Vocabulary Entropy (diversity): {entropy} (low = restricted vocabulary)
-- Average Sentiment Polarity: {sentiment_data['avg_polarity']} (-1 negative, +1 positive)
-- Repetitive Patterns Detected: {len(repetitive)}
-- Posts Analyzed: {len(posts)}
+    advisory_prompt = f"""Role: creator wellness advisor.
+Metrics:
+- Burnout: {burnout_score}/100
+- Entropy: {entropy}
+- Avg sentiment: {sentiment_data['avg_polarity']}
+- Repetitive patterns: {len(repetitive)}
+- Posts: {len(posts)}
 
-Provide 3 short, actionable recommendations to protect this creator's mental health and creativity.
-Be warm, not clinical. Use emoji sparingly.
-Format: numbered list, max 2 sentences each."""
-    advisory = await llm.generate(advisory_prompt, task="mental_health_advisory", max_tokens=300)
+Give 3 warm, practical recommendations to protect mental health and creativity.
+Format: numbered list, max 2 short sentences each.
+"""
+    advisory = await llm.generate(advisory_prompt, task="mental_health_advisory", max_tokens=180)
 
     return {
         "burnout_score": burnout_score,

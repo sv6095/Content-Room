@@ -2,6 +2,7 @@ import { ReactNode, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
+import { useLanguage } from '@/contexts/LanguageContext';
 import {
   Wand2,
   Shield,
@@ -20,23 +21,23 @@ interface DashboardLayoutProps {
   children: ReactNode;
 }
 
-const sidebarItems = [
-  { icon: Wand2, label: 'Creator Studio', path: '/studio' },
-  { icon: Zap, label: '⚡ Intelligence Hub', path: '/intelligence' },
-  { icon: Rocket, label: '🚀 Novel AI Lab', path: '/novel' },
-  { icon: TrendingUp, label: 'Competitor Intel', path: '/competitor' },
-  { icon: CalendarDays, label: 'Content Calendar', path: '/calendar' },
-  { icon: Shield, label: 'Moderation', path: '/moderation' },
-  { icon: CalendarDays, label: 'Schedule', path: '/scheduler' },
-  { icon: Settings, label: 'Settings', path: '/settings' },
-];
-
-
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { t } = useLanguage();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const sidebarItems = [
+    { icon: Wand2, label: t('nav.creatorStudio', 'Creator Studio'), path: '/studio' },
+    { icon: Zap, label: t('nav.intelligenceHub', '⚡ Intelligence Hub'), path: '/intelligence' },
+    { icon: Rocket, label: t('nav.novelLab', '🚀 Novel AI Lab'), path: '/novel' },
+    { icon: TrendingUp, label: t('nav.competitorIntel', 'Competitor Intel'), path: '/competitor' },
+    { icon: CalendarDays, label: t('nav.contentCalendar', 'Content Calendar'), path: '/calendar' },
+    { icon: Shield, label: t('nav.moderation', 'Moderation'), path: '/moderation' },
+    { icon: CalendarDays, label: t('nav.schedule', 'Schedule'), path: '/scheduler' },
+    { icon: Settings, label: t('nav.settings', 'Settings'), path: '/settings' },
+  ];
 
   const handleLogout = () => {
     logout();
@@ -117,7 +118,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             onClick={handleLogout}
           >
             <LogOut className="h-4 w-4 mr-2" />
-            Logout
+            {t('nav.logout', 'Logout')}
           </Button>
         </div>
       </aside>
@@ -134,7 +135,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <Menu className="h-5 w-5" />
           </button>
           <h1 className="text-lg font-semibold">
-            {sidebarItems.find((item) => item.path === location.pathname)?.label || 'Dashboard'}
+            {sidebarItems.find((item) => item.path === location.pathname)?.label || t('nav.dashboard', 'Dashboard')}
           </h1>
         </header>
 

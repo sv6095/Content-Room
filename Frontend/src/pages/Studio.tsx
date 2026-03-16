@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,16 +7,49 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EmptyState } from '@/components/shared/EmptyState';
-import { Upload, FileText, Image, Music, Video, Wand2, Hash, FileSignature, Loader2, Sparkles, Copy, Check, Save, ArrowRight, Languages } from 'lucide-react';
-import { creationAPI, contentAPI, translationAPI, APIError } from '@/services/api';
+import { Upload, FileText, Image, Music, Video, Wand2, Hash, FileSignature, Loader2, Sparkles, Copy, Check, Save, ArrowRight, Languages, Brain, ShieldCheck, Eye, Layers } from 'lucide-react';
+import { creationAPI, contentAPI, translationAPI, intelligenceAPI, motionAPI, APIError } from '@/services/api';
+import type { CultureRewriteResponse, RiskReachResponse, AntiCancelResponse, AssetExplosionResponse, MentalHealthResponse, ShadowbanResponse, ContentItem as SavedAssetItem } from '@/services/api';
 
 type ContentType = 'text' | 'image' | 'audio' | 'video' | null;
+const FIXED_TEXT_MODEL = 'us.amazon.nova-lite-v1:0';
+type ImageEngine = 'titan' | 'nova_canvas';
 
 interface GeneratedContent {
   caption?: string;
   summary?: string;
   hashtags?: string[];
+  transcript?: string;
+  script?: string;
+  ideas?: string[];
   provider?: string;
+}
+
+interface GeneratedImageAsset {
+  image_url: string;
+  engine: string;
+  model_id: string;
+  provider: string;
+  prompt: string;
+}
+
+interface IntelligencePackResult {
+  culture?: CultureRewriteResponse;
+  risk?: RiskReachResponse;
+  cancel?: AntiCancelResponse;
+  assets?: AssetExplosionResponse;
+  mental?: MentalHealthResponse;
+  shadow?: ShadowbanResponse;
+}
+
+type ExecutionPreset = 'fast' | 'balanced' | 'best_quality';
+
+interface CreatorTool {
+  name: string;
+  scope: string;
+  details?: string;
+  note?: string;
+  tier: 'fast' | 'balanced' | 'best_quality';
 }
 
 // Indian languages for translation
@@ -32,6 +65,76 @@ const INDIAN_LANGUAGES = [
   { code: 'or', name: 'Odia', native: 'ଓଡ଼ିଆ' },
 ];
 
+const TOOLKIT_BY_TYPE: Record<Exclude<ContentType, null>, CreatorTool[]> = {
+  text: [
+    {
+      name: 'Amazon Nova Lite',
+      scope: 'Copywriting, scripts, ideation',
+      details: 'Bedrock Nova Lite model is fixed for Studio text generation.',
+      note: 'Creator Studio uses Nova Lite by default for all text generation.',
+      tier: 'fast',
+    },
+  ],
+  image: [
+    {
+      name: 'Amazon Titan Image Generator v2',
+      scope: 'Visual assets and graphics',
+      details: 'General-purpose image generation',
+      note: 'Fast image generation for everyday creator workflows.',
+      tier: 'fast',
+    },
+    {
+      name: 'Amazon Nova Canvas',
+      scope: 'Visual assets and graphics',
+      details: 'Balanced quality visual generation',
+      tier: 'balanced',
+    },
+  ],
+  audio: [
+    {
+      name: 'Amazon Polly (Standard TTS)',
+      scope: 'Voiceover generation',
+      details: 'Voiceover generation',
+      note: 'Reliable narration generation for voice workflows.',
+      tier: 'fast',
+    },
+    {
+      name: 'Amazon Translate',
+      scope: 'Localization',
+      details: 'Localization and language conversion',
+      tier: 'balanced',
+    },
+    {
+      name: 'Amazon Transcribe',
+      scope: 'Captions and speech-to-text',
+      details: 'Speech-to-text and subtitle extraction',
+      note: 'Works well for subtitle and speech extraction pipelines.',
+      tier: 'best_quality',
+    },
+  ],
+  video: [
+    {
+      name: 'AWS Elemental MediaConvert',
+      scope: 'Transcoding and formatting',
+      details: 'Video transcoding and formatting',
+      note: 'Great for production formatting and export workflows.',
+      tier: 'fast',
+    },
+    {
+      name: 'Amazon Nova Reel',
+      scope: 'Generative video clips',
+      details: 'Generative short video clip creation',
+      tier: 'best_quality',
+    },
+    {
+      name: 'Amazon Transcribe',
+      scope: 'Subtitle generation',
+      details: 'Subtitle generation from audio track',
+      tier: 'balanced',
+    },
+  ],
+};
+
 export default function Studio() {
   const [selectedType, setSelectedType] = useState<ContentType>(null);
   const [inputText, setInputText] = useState('');
@@ -42,7 +145,7 @@ export default function Studio() {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [savingToContent, setSavingToContent] = useState(false);
-  const [savedContentId, setSavedContentId] = useState<number | null>(null);
+  const [savedContentId, setSavedContentId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Translation state
@@ -50,15 +153,54 @@ export default function Studio() {
   const [translatedCaption, setTranslatedCaption] = useState<string | null>(null);
   const [translatedSummary, setTranslatedSummary] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState('en');
 
   // Customization state
   const [targetPlatform, setTargetPlatform] = useState<'twitter' | 'instagram' | 'facebook' | 'linkedin' | 'custom'>('twitter');
   const [captionLength, setCaptionLength] = useState(280);
   const [hashtagCount, setHashtagCount] = useState(5);
 
-  // Media-only mode state
-  const [mediaOnlyMode, setMediaOnlyMode] = useState(false);
   const [extractedContent, setExtractedContent] = useState<string | null>(null);
+  const [workflowSteps, setWorkflowSteps] = useState<string[]>([]);
+  const [showManualActions, setShowManualActions] = useState(false);
+  const [executionPreset, setExecutionPreset] = useState<ExecutionPreset>('fast');
+
+  // Intelligence pack state
+  const [intelRegion, setIntelRegion] = useState('general');
+  const [intelFestival, setIntelFestival] = useState('');
+  const [intelNiche, setIntelNiche] = useState('');
+  const [intelLanguage, setIntelLanguage] = useState('English');
+  const [intelRiskLevel, setIntelRiskLevel] = useState(50);
+  const [isRunningIntelligence, setIsRunningIntelligence] = useState(false);
+  const [intelligenceResult, setIntelligenceResult] = useState<IntelligencePackResult | null>(null);
+  const [novaReelPrompt, setNovaReelPrompt] = useState('');
+  const [novaReelDuration, setNovaReelDuration] = useState(6);
+  const [mediaConvertJob, setMediaConvertJob] = useState<{ id: string; status: string; output?: string } | null>(null);
+  const [novaReelJob, setNovaReelJob] = useState<{ arn: string; status: string; output?: string } | null>(null);
+  const [videoActionLoading, setVideoActionLoading] = useState<string | null>(null);
+  const [imagePrompt, setImagePrompt] = useState('');
+  const [imageEngine, setImageEngine] = useState<ImageEngine>('titan');
+  const [imageActionLoading, setImageActionLoading] = useState<string | null>(null);
+  const [generatedImage, setGeneratedImage] = useState<GeneratedImageAsset | null>(null);
+  const [savedAssets, setSavedAssets] = useState<SavedAssetItem[]>([]);
+  const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+
+  const loadSavedAssets = useCallback(async () => {
+    setIsLoadingAssets(true);
+    try {
+      const items = await contentAPI.list();
+      setSavedAssets(items.slice(0, 12));
+    } catch (err) {
+      console.error('Failed to load saved assets:', err);
+    } finally {
+      setIsLoadingAssets(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSavedAssets();
+  }, [loadSavedAssets]);
 
   // Platform presets
   const platformPresets = {
@@ -105,17 +247,23 @@ export default function Studio() {
       
       switch (generationType) {
         case 'caption': {
-          const captionRes = await creationAPI.generateCaption(inputText, selectedType || 'text', captionLength, targetPlatform);
+          const captionRes = await creationAPI.generateCaption(
+            inputText,
+            selectedType || 'text',
+            captionLength,
+            targetPlatform,
+            FIXED_TEXT_MODEL
+          );
           result = { caption: captionRes.result, provider: captionRes.provider };
           break;
         }
         case 'summary': {
-          const summaryRes = await creationAPI.generateSummary(inputText, 150);
+          const summaryRes = await creationAPI.generateSummary(inputText, 150, FIXED_TEXT_MODEL);
           result = { summary: summaryRes.result, provider: summaryRes.provider };
           break;
         }
         case 'hashtags': {
-          const hashtagsRes = await creationAPI.generateHashtags(inputText, hashtagCount);
+          const hashtagsRes = await creationAPI.generateHashtags(inputText, hashtagCount, FIXED_TEXT_MODEL);
           result = { hashtags: hashtagsRes.hashtags, provider: hashtagsRes.provider };
           break;
         }
@@ -139,27 +287,84 @@ export default function Studio() {
   };
 
   const handleGenerateAll = async () => {
-    if (!inputText.trim()) return;
+    if (!selectedType) return;
+    const hasTextInput = inputText.trim().length > 0;
+    const hasMediaUpload = selectedType !== 'text' && uploadedFile !== null;
+    if (!hasTextInput && !hasMediaUpload) return;
     
     setIsProcessing(true);
     setProcessingType('all');
     setError(null);
     setTranslatedCaption(null);
     setTranslatedSummary(null);
+    setWorkflowSteps([]);
     
     try {
+      let processingText = inputText.trim();
+      let nextCaption: string | undefined;
+      let nextSummary: string | undefined;
+      let nextHashtags: string[] | undefined;
+      let nextProvider = '';
+      const completed: string[] = [];
+      const selectedTools = TOOLKIT_BY_TYPE[selectedType]
+        .filter((tool) =>
+          selectedType === 'image'
+            ? true
+            : tool.tier === executionPreset || executionPreset === 'balanced'
+        )
+        .map((tool) => tool.name);
+      if (selectedTools.length) {
+        completed.push(`Stack: ${selectedTools.join(' + ')}`);
+      }
+
+      if (hasMediaUpload && uploadedFile) {
+        const mediaType = selectedType as 'image' | 'audio' | 'video';
+        const mediaRes = await creationAPI.extractAndGenerate(uploadedFile, mediaType);
+        completed.push('Media analyzed');
+        setExtractedContent(mediaRes.extracted_content || null);
+
+        const extracted = (mediaRes.extracted_content || '').trim();
+        if (extracted) {
+          processingText = hasTextInput
+            ? `${extracted}\n\nCreator context: ${processingText}`
+            : extracted;
+        }
+
+        nextCaption = mediaRes.caption;
+        nextSummary = mediaRes.summary;
+        nextHashtags = mediaRes.hashtags;
+        nextProvider = mediaRes.provider;
+      } else {
+        setExtractedContent(null);
+      }
+
       const [captionRes, summaryRes, hashtagsRes] = await Promise.all([
-        creationAPI.generateCaption(inputText, selectedType || 'text', captionLength, targetPlatform),
-        creationAPI.generateSummary(inputText, 150),
-        creationAPI.generateHashtags(inputText, hashtagCount),
+        creationAPI.generateCaption(
+          processingText,
+          selectedType || 'text',
+          captionLength,
+          targetPlatform,
+          FIXED_TEXT_MODEL
+        ),
+        creationAPI.generateSummary(processingText, 150, FIXED_TEXT_MODEL),
+        creationAPI.generateHashtags(processingText, hashtagCount, FIXED_TEXT_MODEL),
       ]);
 
+      nextCaption = captionRes.result || nextCaption;
+      nextSummary = summaryRes.result || nextSummary;
+      nextHashtags = hashtagsRes.hashtags?.length ? hashtagsRes.hashtags : nextHashtags;
+      nextProvider = [nextProvider, captionRes.provider, summaryRes.provider, hashtagsRes.provider]
+        .filter(Boolean)
+        .join(' + ');
+      completed.push('Caption generated', 'Summary generated', 'Hashtags generated');
+
       setGeneratedContent({
-        caption: captionRes.result,
-        summary: summaryRes.result,
-        hashtags: hashtagsRes.hashtags,
-        provider: captionRes.provider,
+        caption: nextCaption,
+        summary: nextSummary,
+        hashtags: nextHashtags,
+        provider: nextProvider,
       });
+      setWorkflowSteps(completed);
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);
@@ -167,50 +372,6 @@ export default function Studio() {
         setError('Failed to generate content. Please try again.');
       }
       console.error('Generation error:', err);
-    } finally {
-      setIsProcessing(false);
-      setProcessingType(null);
-    }
-  };
-
-  const handleAnalyzeMedia = async () => {
-    if (!uploadedFile) {
-      setError('Please upload a media file first');
-      return;
-    }
-    if (selectedType === 'video') {
-      setError('Video extraction is currently unavailable.');
-      return;
-    }
-
-    setIsProcessing(true);
-    setProcessingType('media-analysis');
-    setError(null);
-    setExtractedContent(null);
-    setGeneratedContent(null);
-
-    try {
-      const mediaType = selectedType as 'image' | 'audio' | 'video';
-      const data = await creationAPI.extractAndGenerate(uploadedFile, mediaType);
-      
-      // Set extracted content
-      setExtractedContent(data.extracted_content || 'Media analyzed successfully');
-      
-      // Set generated content
-      setGeneratedContent({
-        caption: data.caption,
-        summary: data.summary,
-        hashtags: data.hashtags,
-        provider: data.provider,
-      });
-
-      // Optionally set as input text for further processing
-      if (data.extracted_content) {
-        setInputText(data.extracted_content);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to analyze media');
-      console.error('Media analysis error:', err);
     } finally {
       setIsProcessing(false);
       setProcessingType(null);
@@ -246,6 +407,34 @@ export default function Studio() {
     }
   };
 
+  const handleTranscribe = async () => {
+    if (!uploadedFile || selectedType !== 'audio') return;
+
+    setIsTranscribing(true);
+    setError(null);
+    try {
+      const transcriptRes = await creationAPI.transcribeAudio(uploadedFile, transcriptionLanguage);
+      setGeneratedContent((prev) => ({
+        ...prev,
+        transcript: transcriptRes.text,
+        provider: [prev?.provider, transcriptRes.provider].filter(Boolean).join(' + '),
+      }));
+      setExtractedContent(transcriptRes.text || null);
+      setWorkflowSteps((prev) => {
+        if (prev.includes('Audio transcribed')) return prev;
+        return [...prev, 'Audio transcribed'];
+      });
+    } catch (err) {
+      if (err instanceof APIError) {
+        setError(err.message);
+      } else {
+        setError('Failed to transcribe audio. Please try again.');
+      }
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   const handleCopy = async (text: string, field: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedField(field);
@@ -260,6 +449,15 @@ export default function Studio() {
     setSavedContentId(null);
     setTranslatedCaption(null);
     setTranslatedSummary(null);
+    setExtractedContent(null);
+    setWorkflowSteps([]);
+    setTranscriptionLanguage('en');
+    setIsTranscribing(false);
+    setMediaConvertJob(null);
+    setNovaReelJob(null);
+    setNovaReelPrompt('');
+    setGeneratedImage(null);
+    setImagePrompt('');
   };
 
   const handleSaveToMyContent = async () => {
@@ -276,6 +474,7 @@ export default function Studio() {
         hashtags: Array.isArray(hashtags) ? hashtags : undefined,
       });
       setSavedContentId(item.id);
+      await loadSavedAssets();
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
       else setError('Failed to save to My Content');
@@ -289,6 +488,242 @@ export default function Studio() {
     setError(null);
     setTranslatedCaption(null);
     setTranslatedSummary(null);
+    setWorkflowSteps([]);
+    setIntelligenceResult(null);
+  };
+
+  const canRunCompleteWorkflow = selectedType === 'text'
+    ? inputText.trim().length > 0
+    : uploadedFile !== null || inputText.trim().length > 0;
+
+  const resolvePlatformForIntelligence = () =>
+    targetPlatform === 'custom' ? 'instagram' : targetPlatform;
+
+  const presetLabelMap: Record<ExecutionPreset, string> = {
+    fast: 'Fast',
+    balanced: 'Balanced',
+    best_quality: 'Best Quality',
+  };
+
+  const getIntelligenceSeedText = () => {
+    const primary = generatedContent?.caption?.trim()
+      || generatedContent?.summary?.trim()
+      || inputText.trim()
+      || extractedContent?.trim()
+      || '';
+    return primary;
+  };
+
+  const handleRunIntelligencePack = async () => {
+    const seedText = getIntelligenceSeedText();
+    if (!seedText) return;
+
+    setIsRunningIntelligence(true);
+    setError(null);
+    setIntelligenceResult(null);
+
+    try {
+      const platform = resolvePlatformForIntelligence();
+      const [culture, risk, cancel, assets, mental, shadow] = await Promise.all([
+        intelligenceAPI.cultureRewrite(
+          seedText,
+          intelRegion.trim() || 'general',
+          intelFestival.trim() || undefined,
+          intelNiche.trim() || undefined,
+          intelLanguage
+        ),
+        intelligenceAPI.riskReachGenerate(
+          seedText,
+          intelRiskLevel,
+          platform,
+          intelNiche.trim() || undefined
+        ),
+        intelligenceAPI.antiCancelAnalyze(seedText),
+        intelligenceAPI.explodeAssets(seedText, intelNiche.trim() || undefined),
+        intelligenceAPI.mentalHealthAnalyze([seedText]),
+        intelligenceAPI.predictShadowban(seedText, generatedContent?.hashtags, platform),
+      ]);
+
+      setIntelligenceResult({
+        culture,
+        risk,
+        cancel,
+        assets,
+        mental,
+        shadow,
+      });
+    } catch (err) {
+      if (err instanceof APIError) {
+        setError(err.message);
+      } else {
+        setError('Failed to run Intelligence Pack. Please try again.');
+      }
+      console.error('Intelligence pack error:', err);
+    } finally {
+      setIsRunningIntelligence(false);
+    }
+  };
+
+  const handleGenerateImage = async () => {
+    const prompt = imagePrompt.trim() || inputText.trim();
+    if (!prompt) {
+      setError('Enter an image prompt first.');
+      return;
+    }
+    setImageActionLoading('generate-image');
+    setError(null);
+    try {
+      const res = await motionAPI.generateImage(prompt, imageEngine, 1024, 1024);
+      setGeneratedImage({
+        image_url: res.image_url,
+        engine: res.engine,
+        model_id: res.model_id,
+        provider: res.provider,
+        prompt: res.prompt,
+      });
+      setWorkflowSteps((prev) => (prev.includes('Image generated') ? prev : [...prev, 'Image generated']));
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to generate image.');
+    } finally {
+      setImageActionLoading(null);
+    }
+  };
+
+  const handleSaveGeneratedImage = async () => {
+    if (!generatedImage) return;
+    setSavingToContent(true);
+    setError(null);
+    try {
+      const item = await contentAPI.create({
+        content_type: 'image',
+        original_text: generatedImage.prompt,
+        file_path: generatedImage.image_url,
+      });
+      setSavedContentId(item.id);
+      await loadSavedAssets();
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to save generated image.');
+    } finally {
+      setSavingToContent(false);
+    }
+  };
+
+  const handleSaveMediaConvertOutput = async () => {
+    if (!mediaConvertJob?.output) return;
+    setSavingToContent(true);
+    setError(null);
+    try {
+      const item = await contentAPI.create({
+        content_type: 'video',
+        original_text: inputText.trim() || undefined,
+        file_path: mediaConvertJob.output,
+      });
+      setSavedContentId(item.id);
+      await loadSavedAssets();
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to save MediaConvert output.');
+    } finally {
+      setSavingToContent(false);
+    }
+  };
+
+  const handleSaveNovaReelOutput = async () => {
+    if (!novaReelJob?.output) return;
+    setSavingToContent(true);
+    setError(null);
+    try {
+      const item = await contentAPI.create({
+        content_type: 'video',
+        original_text: novaReelPrompt.trim() || inputText.trim() || undefined,
+        file_path: novaReelJob.output,
+      });
+      setSavedContentId(item.id);
+      await loadSavedAssets();
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to save Nova Reel output.');
+    } finally {
+      setSavingToContent(false);
+    }
+  };
+
+  const handleStartMediaConvert = async () => {
+    if (!uploadedFile || selectedType !== 'video') return;
+    setVideoActionLoading('mediaconvert');
+    setError(null);
+    try {
+      const res = await motionAPI.startMediaConvert(uploadedFile);
+      setMediaConvertJob({
+        id: res.job_id,
+        status: res.status,
+        output: res.output_s3_uri,
+      });
+      setWorkflowSteps((prev) => (prev.includes('MediaConvert started') ? prev : [...prev, 'MediaConvert started']));
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to start MediaConvert job.');
+    } finally {
+      setVideoActionLoading(null);
+    }
+  };
+
+  const handleCheckMediaConvert = async () => {
+    if (!mediaConvertJob?.id) return;
+    setVideoActionLoading('mediaconvert-status');
+    try {
+      const res = await motionAPI.getMediaConvertStatus(mediaConvertJob.id);
+      setMediaConvertJob((prev) => prev ? { ...prev, status: res.status, output: prev.output || res.output_s3_uri } : prev);
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to fetch MediaConvert status.');
+    } finally {
+      setVideoActionLoading(null);
+    }
+  };
+
+  const handleStartNovaReel = async () => {
+    if (executionPreset !== 'best_quality') {
+      setError('Nova Reel is available only in Best Quality preset.');
+      return;
+    }
+    const prompt = novaReelPrompt.trim() || inputText.trim();
+    if (!prompt) {
+      setError('Enter a prompt for Nova Reel generation.');
+      return;
+    }
+    setVideoActionLoading('nova-reel');
+    setError(null);
+    try {
+      const res = await motionAPI.startNovaReel(prompt, novaReelDuration, '16:9');
+      setNovaReelJob({
+        arn: res.invocation_arn,
+        status: res.status,
+        output: res.output_s3_uri,
+      });
+      setWorkflowSteps((prev) => (prev.includes('Nova Reel started') ? prev : [...prev, 'Nova Reel started']));
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to start Nova Reel job.');
+    } finally {
+      setVideoActionLoading(null);
+    }
+  };
+
+  const handleCheckNovaReel = async () => {
+    if (!novaReelJob?.arn) return;
+    setVideoActionLoading('nova-reel-status');
+    try {
+      const res = await motionAPI.getNovaReelStatus(novaReelJob.arn);
+      setNovaReelJob((prev) => prev ? { ...prev, status: res.status, output: prev.output || res.output_s3_uri } : prev);
+    } catch (err) {
+      if (err instanceof APIError) setError(err.message);
+      else setError('Failed to fetch Nova Reel status.');
+    } finally {
+      setVideoActionLoading(null);
+    }
   };
 
   return (
@@ -300,6 +735,55 @@ export default function Studio() {
             Create, generate, and translate AI-powered content in one place.
           </p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">Your Saved Assets</CardTitle>
+                <CardDescription>Recent text, image, and video assets stored for your account.</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void loadSavedAssets()} disabled={isLoadingAssets}>
+                {isLoadingAssets ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Refresh
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {savedAssets.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No saved assets yet. Save one from Creator Studio to see it here.</p>
+            ) : (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {savedAssets.map((asset) => (
+                  <div key={asset.id} className="rounded-lg border p-3 bg-background space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs uppercase px-2 py-1 rounded bg-muted">{asset.content_type}</span>
+                      <span className="text-[11px] text-muted-foreground">{new Date(asset.created_at).toLocaleString()}</span>
+                    </div>
+                    {asset.caption && <p className="text-sm line-clamp-3">{asset.caption}</p>}
+                    {!asset.caption && asset.summary && <p className="text-sm line-clamp-3">{asset.summary}</p>}
+                    {!asset.caption && !asset.summary && asset.original_text && <p className="text-sm line-clamp-3">{asset.original_text}</p>}
+
+                    {asset.file_path && asset.content_type === 'image' && (
+                      <img src={asset.file_path} alt="Saved asset" className="w-full rounded border border-border" />
+                    )}
+                    {asset.file_path && asset.content_type === 'video' && (
+                      <video src={asset.file_path} controls className="w-full rounded border border-border" />
+                    )}
+                    {asset.file_path && asset.content_type === 'audio' && (
+                      <audio src={asset.file_path} controls className="w-full" />
+                    )}
+                    {asset.file_path && !['image', 'video', 'audio'].includes(asset.content_type) && (
+                      <a href={asset.file_path} target="_blank" rel="noreferrer" className="text-xs text-primary underline break-all">
+                        {asset.file_path}
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Error Alert */}
         {error && (
@@ -321,6 +805,12 @@ export default function Studio() {
                   key={type}
                   onClick={() => {
                     setSelectedType(type);
+                    if (type === 'text') {
+                      setExecutionPreset('fast');
+                    }
+                    if (type === 'image') {
+                      setExecutionPreset('fast');
+                    }
                     setUploadedFile(null);
                   }}
                   className={`p-4 rounded-xl border transition-all text-left ${
@@ -337,6 +827,73 @@ export default function Studio() {
             </div>
           </CardContent>
         </Card>
+
+        {selectedType && selectedType !== 'text' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Creator Tool Stack</CardTitle>
+              <CardDescription>
+                Production model and service routing for {selectedType} workflows in Creator Studio.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {selectedType !== 'image' && (
+                <div className="grid sm:grid-cols-3 gap-2">
+                  <button
+                    onClick={() => setExecutionPreset('fast')}
+                    className={`p-3 rounded-lg border text-left transition ${
+                      executionPreset === 'fast' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/30'
+                    }`}
+                  >
+                    <p className="text-sm font-medium">Fast</p>
+                    <p className="text-xs text-muted-foreground">Optimize for quick turnaround</p>
+                  </button>
+                  <button
+                    onClick={() => setExecutionPreset('balanced')}
+                    className={`p-3 rounded-lg border text-left transition ${
+                      executionPreset === 'balanced' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/30'
+                    }`}
+                  >
+                    <p className="text-sm font-medium">Balanced</p>
+                    <p className="text-xs text-muted-foreground">Best quality and speed mix</p>
+                  </button>
+                  <button
+                    onClick={() => setExecutionPreset('best_quality')}
+                    className={`p-3 rounded-lg border text-left transition ${
+                      executionPreset === 'best_quality' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/30'
+                    }`}
+                  >
+                    <p className="text-sm font-medium">Best Quality</p>
+                    <p className="text-xs text-muted-foreground">Prioritize strongest outputs</p>
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {TOOLKIT_BY_TYPE[selectedType].map((tool) => (
+                  <div
+                    key={`${tool.name}-${tool.scope}`}
+                    className={`p-3 rounded-lg border ${
+                      selectedType === 'image' || executionPreset === 'balanced' || tool.tier === executionPreset
+                        ? 'border-primary/30 bg-primary/5'
+                        : 'border-border/60 bg-muted/20'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">{tool.name}</p>
+                      <span className="text-[10px] uppercase tracking-wide px-2 py-1 rounded bg-background border">
+                        {tool.tier.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">{tool.scope}</p>
+                    {tool.details && <p className="text-xs mt-1">{tool.details}</p>}
+                    {tool.note && <p className="text-xs text-muted-foreground mt-1">{tool.note}</p>}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Input Area */}
         {selectedType && (
@@ -387,27 +944,6 @@ export default function Studio() {
                 </div>
               )}
 
-              {/* Media-Only Mode Toggle */}
-              {selectedType !== 'text' && uploadedFile && (
-                <div className="flex items-center justify-between p-3 rounded-lg bg-primary/5 border border-primary/20">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-primary" />
-                    <span className="text-sm font-medium">AI Media Analysis Mode</span>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="sr-only peer"
-                      checked={mediaOnlyMode}
-                      onChange={(e) => setMediaOnlyMode(e.target.checked)}
-                      aria-label="Toggle AI Media Analysis Mode"
-                      title="Enable media-only analysis without text input"
-                    />
-                    <div className="w-11 h-6 bg-muted rounded-full peer peer-checked:bg-primary peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                  </label>
-                </div>
-              )}
-
               {/* Extracted Content Display */}
               {extractedContent && (
                 <div className="space-y-2">
@@ -420,16 +956,14 @@ export default function Studio() {
 
               <div className="space-y-2">
                 <Label htmlFor="content">
-                  {selectedType === 'text' ? 'Content' : mediaOnlyMode ? 'Additional Context (Optional)' : 'Description / Context'}
+                  {selectedType === 'text' ? 'Content' : 'Description / Context (Optional)'}
                 </Label>
                 <Textarea
                   id="content"
                   placeholder={
-                    mediaOnlyMode 
-                      ? 'Add extra context or leave empty for AI-only analysis...'
-                      : selectedType === 'text'
+                    selectedType === 'text'
                       ? 'Enter your text content here...'
-                      : 'Describe your content for better AI generation...'
+                      : 'Add context, campaign goals, or audience note (optional)...'
                   }
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
@@ -502,63 +1036,364 @@ export default function Studio() {
                 </div>
               </div>
 
-              {/* Generation Actions */}
-              <div className="flex flex-wrap gap-3 pt-4">
-                {/* Media-Only Mode: Analyze Media Button */}
-                {mediaOnlyMode && selectedType !== 'text' && (
-                  <Button
-                    variant="hero"
-                    onClick={handleAnalyzeMedia}
-                    disabled={isProcessing || !uploadedFile}
-                  >
-                    {processingType === 'media-analysis' ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-4 w-4 mr-2" />
-                    )}
-                    Analyze Media
-                  </Button>
-                )}
-
-                {/* Standard Mode: Generate Buttons */}
-                {!mediaOnlyMode && (
-                  <>
+              {selectedType === 'audio' && uploadedFile && (
+                <div className="space-y-3 p-4 rounded-lg bg-blue-500/5 border border-blue-500/20">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-medium">Transcription</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Generate a clean transcript before running content generation.
+                      </p>
+                    </div>
                     <Button
-                      variant="hero"
-                      onClick={handleGenerateAll}
-                      disabled={isProcessing || !inputText.trim()}
+                      variant="outline"
+                      onClick={handleTranscribe}
+                      disabled={isTranscribing}
                     >
-                      {processingType === 'all' ? (
+                      {isTranscribing ? (
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       ) : (
-                        <Sparkles className="h-4 w-4 mr-2" />
+                        <Music className="h-4 w-4 mr-2" />
                       )}
-                      Generate All
+                      Transcribe Audio
                     </Button>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="transcription-language">Language hint</Label>
+                    <Select value={transcriptionLanguage} onValueChange={setTranscriptionLanguage}>
+                      <SelectTrigger id="transcription-language" className="w-48">
+                        <SelectValue placeholder="Select language" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="en">English</SelectItem>
+                        <SelectItem value="hi">Hindi</SelectItem>
+                        <SelectItem value="ta">Tamil</SelectItem>
+                        <SelectItem value="te">Telugu</SelectItem>
+                        <SelectItem value="bn">Bengali</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
+              {selectedType === 'image' && (
+                <div className="space-y-4 p-4 rounded-lg bg-sky-500/5 border border-sky-500/20">
+                  <div>
+                    <h4 className="text-sm font-medium">Image Generation</h4>
+                    <p className="text-xs text-muted-foreground">
+                      Generate visual assets directly from your prompt.
+                    </p>
+                  </div>
+                  <div className="grid sm:grid-cols-3 gap-4">
+                    <div className="sm:col-span-2 space-y-2">
+                      <Label htmlFor="image-prompt">Prompt</Label>
+                      <Textarea
+                        id="image-prompt"
+                        rows={3}
+                        value={imagePrompt}
+                        onChange={(e) => setImagePrompt(e.target.value)}
+                        placeholder="Describe the visual you want to create..."
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="image-quality">Quality</Label>
+                      <Select value={imageEngine} onValueChange={(value: ImageEngine) => setImageEngine(value)}>
+                        <SelectTrigger id="image-quality">
+                          <SelectValue placeholder="Select quality" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="titan">Standard (Titan)</SelectItem>
+                          <SelectItem value="nova_canvas">High (Nova Canvas)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       variant="outline"
-                      onClick={() => handleGenerate('caption')}
-                      disabled={isProcessing || !inputText.trim()}
+                      onClick={handleGenerateImage}
+                      disabled={imageActionLoading === 'generate-image'}
                     >
-                      {processingType === 'caption' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
-                      Caption
+                      {imageActionLoading === 'generate-image' ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Image className="h-4 w-4 mr-2" />
+                      )}
+                      Generate Image
                     </Button>
+                    {generatedImage && (
+                      <Button
+                        variant="outline"
+                        onClick={handleSaveGeneratedImage}
+                        disabled={savingToContent}
+                      >
+                        {savingToContent ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                        Save Generated Image
+                      </Button>
+                    )}
+                  </div>
+                  {generatedImage && (
+                    <div className="p-3 rounded-lg bg-background border space-y-3">
+                      <img
+                        src={generatedImage.image_url}
+                        alt="Generated asset"
+                        className="w-full max-w-xl rounded-lg border border-border"
+                      />
+                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span className="px-2 py-1 rounded bg-muted">Engine: {generatedImage.engine}</span>
+                        <span className="px-2 py-1 rounded bg-muted">Model: {generatedImage.model_id}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selectedType === 'video' && (
+                <div className="space-y-4 p-4 rounded-lg bg-violet-500/5 border border-violet-500/20">
+                  <div>
+                    <h4 className="text-sm font-medium">Motion & Video Production</h4>
+                    <p className="text-xs text-muted-foreground">
+                      Run production actions directly from Creator Studio.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       variant="outline"
-                      onClick={() => handleGenerate('summary')}
-                      disabled={isProcessing || !inputText.trim()}
+                      onClick={handleStartMediaConvert}
+                      disabled={!uploadedFile || videoActionLoading === 'mediaconvert'}
                     >
-                  {processingType === 'summary' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSignature className="h-4 w-4 mr-2" />}
-                  Summary
-                </Button>
+                      {videoActionLoading === 'mediaconvert' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Video className="h-4 w-4 mr-2" />}
+                      Run MediaConvert
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={handleCheckMediaConvert}
+                      disabled={!mediaConvertJob || videoActionLoading === 'mediaconvert-status'}
+                    >
+                      {videoActionLoading === 'mediaconvert-status' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                      Check MediaConvert Status
+                    </Button>
+                  </div>
+                  {mediaConvertJob && (
+                    <div className="p-3 rounded-lg bg-background border">
+                      <p className="text-xs"><span className="font-medium">Job:</span> {mediaConvertJob.id}</p>
+                      <p className="text-xs"><span className="font-medium">Status:</span> {mediaConvertJob.status}</p>
+                      {mediaConvertJob.output && <p className="text-xs break-all"><span className="font-medium">Output:</span> {mediaConvertJob.output}</p>}
+                      {mediaConvertJob.output && (
+                        <div className="mt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleSaveMediaConvertOutput}
+                            disabled={savingToContent}
+                          >
+                            {savingToContent ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                            Save Video Asset
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label htmlFor="nova-reel-prompt">Nova Reel Prompt</Label>
+                    <Textarea
+                      id="nova-reel-prompt"
+                      rows={3}
+                      placeholder="Describe the generated video scene..."
+                      value={novaReelPrompt}
+                      onChange={(e) => setNovaReelPrompt(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="nova-reel-duration">Nova Reel Duration (seconds)</Label>
+                    <input
+                      id="nova-reel-duration"
+                      type="range"
+                      min="3"
+                      max="30"
+                      step="1"
+                      value={novaReelDuration}
+                      onChange={(e) => setNovaReelDuration(parseInt(e.target.value))}
+                      className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer slider"
+                    />
+                    <p className="text-xs text-muted-foreground">{novaReelDuration}s</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleStartNovaReel}
+                      disabled={videoActionLoading === 'nova-reel' || executionPreset !== 'best_quality'}
+                    >
+                      {videoActionLoading === 'nova-reel' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+                      Generate Nova Reel
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={handleCheckNovaReel}
+                      disabled={!novaReelJob || videoActionLoading === 'nova-reel-status'}
+                    >
+                      {videoActionLoading === 'nova-reel-status' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                      Check Nova Reel Status
+                    </Button>
+                  </div>
+                  {novaReelJob && (
+                    <div className="p-3 rounded-lg bg-background border">
+                      <p className="text-xs break-all"><span className="font-medium">Invocation ARN:</span> {novaReelJob.arn}</p>
+                      <p className="text-xs"><span className="font-medium">Status:</span> {novaReelJob.status}</p>
+                      {novaReelJob.output && <p className="text-xs break-all"><span className="font-medium">Output:</span> {novaReelJob.output}</p>}
+                      {novaReelJob.output && (
+                        <div className="mt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleSaveNovaReelOutput}
+                            disabled={savingToContent}
+                          >
+                            {savingToContent ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                            Save Video Asset
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-4 p-4 rounded-lg bg-primary/5 border border-primary/20">
+                <div>
+                  <h4 className="text-sm font-medium">Intelligence Pack (Integrated Hub)</h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Run all Intelligence Hub checks in Creator Studio on your current content context.
+                  </p>
+                </div>
+                <div className="grid sm:grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="intel-region">Region</Label>
+                    <input
+                      id="intel-region"
+                      type="text"
+                      value={intelRegion}
+                      onChange={(e) => setIntelRegion(e.target.value)}
+                      placeholder="general / Chennai / Delhi"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="intel-language">Language</Label>
+                    <input
+                      id="intel-language"
+                      type="text"
+                      value={intelLanguage}
+                      onChange={(e) => setIntelLanguage(e.target.value)}
+                      placeholder="English / Hindi / Tamil"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="intel-festival">Festival</Label>
+                    <input
+                      id="intel-festival"
+                      type="text"
+                      value={intelFestival}
+                      onChange={(e) => setIntelFestival(e.target.value)}
+                      placeholder="Optional"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="intel-niche">Niche</Label>
+                    <input
+                      id="intel-niche"
+                      type="text"
+                      value={intelNiche}
+                      onChange={(e) => setIntelNiche(e.target.value)}
+                      placeholder="Beauty / Finance / Fitness"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="intel-risk-level">Risk vs Reach Dial: {intelRiskLevel}</Label>
+                  <input
+                    id="intel-risk-level"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={intelRiskLevel}
+                    onChange={(e) => setIntelRiskLevel(parseInt(e.target.value))}
+                    title="Adjust intelligence risk level"
+                    aria-label="Intelligence risk level slider"
+                    className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer slider"
+                  />
+                </div>
                 <Button
                   variant="outline"
-                  onClick={() => handleGenerate('hashtags')}
-                  disabled={isProcessing || !inputText.trim()}
+                  onClick={handleRunIntelligencePack}
+                  disabled={isRunningIntelligence || !getIntelligenceSeedText()}
                 >
-                  {processingType === 'hashtags' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Hash className="h-4 w-4 mr-2" />}
-                  Hashtags
+                  {isRunningIntelligence ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Brain className="h-4 w-4 mr-2" />
+                  )}
+                  Run Full Intelligence Pack
                 </Button>
+              </div>
+
+              {/* Generation Actions */}
+              <div className="flex flex-wrap gap-3 pt-4">
+                <Button
+                  variant="hero"
+                  onClick={handleGenerateAll}
+                  disabled={isProcessing || !canRunCompleteWorkflow}
+                >
+                  {processingType === 'all' ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4 mr-2" />
+                  )}
+                  {selectedType === 'text'
+                    ? 'Create Complete Content Package'
+                    : selectedType === 'image'
+                      ? 'Analyze Upload + Create Complete Package'
+                    : `Analyze Upload + Create Complete Package (${presetLabelMap[executionPreset]})`}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowManualActions((prev) => !prev)}
+                  disabled={isProcessing}
+                >
+                  {showManualActions ? 'Hide manual actions' : 'Show manual actions'}
+                </Button>
+
+                {showManualActions && (
+                  <>
+                  <Button
+                    variant="outline"
+                    onClick={() => handleGenerate('caption')}
+                    disabled={isProcessing || !inputText.trim()}
+                  >
+                    {processingType === 'caption' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
+                    Caption
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => handleGenerate('summary')}
+                    disabled={isProcessing || !inputText.trim()}
+                  >
+                  {processingType === 'summary' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSignature className="h-4 w-4 mr-2" />}
+                  Summary
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => handleGenerate('hashtags')}
+                    disabled={isProcessing || !inputText.trim()}
+                  >
+                    {processingType === 'hashtags' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Hash className="h-4 w-4 mr-2" />}
+                    Hashtags
+                  </Button>
                   </>
                 )}
               </div>
@@ -583,6 +1418,19 @@ export default function Studio() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {workflowSteps.length > 0 && (
+                <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+                  <Label className="text-xs uppercase tracking-wide text-emerald-700">Workflow completed</Label>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {workflowSteps.map((step) => (
+                      <span key={step} className="text-xs px-2 py-1 rounded-md bg-emerald-500/15 text-emerald-700">
+                        {step}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {generatedContent.caption && (
                 <div className="p-4 rounded-xl bg-primary/5 group">
                   <div className="flex items-center justify-between mb-2">
@@ -597,6 +1445,22 @@ export default function Studio() {
                     </Button>
                   </div>
                   <p className="text-sm whitespace-pre-wrap">{generatedContent.caption}</p>
+                </div>
+              )}
+              {generatedContent.transcript && (
+                <div className="p-4 rounded-xl bg-primary/5 group">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-xs uppercase tracking-wide text-muted-foreground">Transcript</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity h-8"
+                      onClick={() => handleCopy(generatedContent.transcript!, 'transcript')}
+                    >
+                      {copiedField === 'transcript' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap">{generatedContent.transcript}</p>
                 </div>
               )}
               {generatedContent.summary && (
@@ -734,13 +1598,117 @@ export default function Studio() {
                 </Button>
                 {savedContentId != null && (
                   <Button variant="link" asChild className="text-primary">
-                    <Link to={`/content?contentId=${savedContentId}`}>
-                      View in My Content
+                    <Link to={`/scheduler?contentId=${savedContentId}`}>
+                      Continue to Scheduler
                       <ArrowRight className="h-4 w-4 ml-1" />
                     </Link>
                   </Button>
                 )}
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {intelligenceResult && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Intelligence Pack Results</CardTitle>
+              <CardDescription>
+                Unified strategic insights from Culture, Risk, Safety, Asset Explosion, Wellbeing, and Shadowban checks.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {intelligenceResult.culture?.rewritten && (
+                <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 group">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-xs uppercase tracking-wide text-muted-foreground">Culture Engine Adaptation</Label>
+                    <Button variant="ghost" size="sm" onClick={() => handleCopy(intelligenceResult.culture!.rewritten, 'intel-culture')}>
+                      {copiedField === 'intel-culture' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap">{intelligenceResult.culture.rewritten}</p>
+                </div>
+              )}
+
+              {intelligenceResult.risk && (
+                <div className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 group">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-xs uppercase tracking-wide text-muted-foreground">Risk vs Reach Rewrite</Label>
+                    <Button variant="ghost" size="sm" onClick={() => handleCopy(intelligenceResult.risk!.generated, 'intel-risk')}>
+                      {copiedField === 'intel-risk' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap mb-2">{intelligenceResult.risk.generated}</p>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="px-2 py-1 rounded bg-background border">Safety: {intelligenceResult.risk.safety_score}</span>
+                    <span className="px-2 py-1 rounded bg-background border">Engagement: {intelligenceResult.risk.estimated_engagement_probability}%</span>
+                    <span className="px-2 py-1 rounded bg-background border">Moderation Risk: {intelligenceResult.risk.moderation_risk_percent}%</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                {intelligenceResult.cancel && (
+                  <div className="p-4 rounded-xl border border-red-500/20 bg-red-500/5">
+                    <div className="flex items-center gap-2 mb-2">
+                      <ShieldCheck className="h-4 w-4 text-red-500" />
+                      <Label className="text-xs uppercase tracking-wide text-muted-foreground">Anti-Cancel Shield</Label>
+                    </div>
+                    <p className="text-sm font-medium mb-1">Risk: {intelligenceResult.cancel.risk_level}</p>
+                    {intelligenceResult.cancel.recommendation && (
+                      <p className="text-xs text-muted-foreground">{intelligenceResult.cancel.recommendation}</p>
+                    )}
+                  </div>
+                )}
+
+                {intelligenceResult.shadow && (
+                  <div className="p-4 rounded-xl border border-orange-500/20 bg-orange-500/5">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Eye className="h-4 w-4 text-orange-500" />
+                      <Label className="text-xs uppercase tracking-wide text-muted-foreground">Shadowban Predictor</Label>
+                    </div>
+                    <p className="text-sm font-medium mb-1">
+                      Probability: {intelligenceResult.shadow.shadowban_probability}% ({intelligenceResult.shadow.risk_level})
+                    </p>
+                    {intelligenceResult.shadow.recommendation && (
+                      <p className="text-xs text-muted-foreground">{intelligenceResult.shadow.recommendation}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {intelligenceResult.assets && (
+                <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Layers className="h-4 w-4 text-blue-500" />
+                    <Label className="text-xs uppercase tracking-wide text-muted-foreground">Asset Explosion</Label>
+                  </div>
+                  <p className="text-sm mb-2">
+                    Generated {intelligenceResult.assets.successful_assets} / {intelligenceResult.assets.total_assets} assets
+                  </p>
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    {intelligenceResult.assets.assets.slice(0, 6).map((asset, idx) => (
+                      <div key={`${asset.asset_type}-${idx}`} className="p-2 rounded-lg bg-background border">
+                        <p className="text-xs font-medium mb-1">{asset.platform}</p>
+                        <p className="text-xs text-muted-foreground line-clamp-3">{asset.content}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {intelligenceResult.mental && (
+                <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Brain className="h-4 w-4 text-emerald-500" />
+                    <Label className="text-xs uppercase tracking-wide text-muted-foreground">Creator Wellbeing Snapshot</Label>
+                  </div>
+                  <p className="text-sm mb-1">
+                    Burnout Score: {intelligenceResult.mental.burnout_score}/100 ({intelligenceResult.mental.burnout_risk})
+                  </p>
+                  <p className="text-xs text-muted-foreground">{intelligenceResult.mental.recommendations}</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

@@ -2,7 +2,7 @@
 Novel Future Enhancement Services — Content Room
 =================================================
 Implements 5 advanced agentic features using the existing LLM fallback chain.
-No AWS required — uses Groq / Gemini / OpenRouter / Cerebras.
+Primary: AWS Bedrock (Nova) with Groq fallback via shared llm_service.
 
 Features:
 1. Multi-Agent Competitor Intelligence (Signal Intelligence)
@@ -12,7 +12,7 @@ Features:
 5. Predictive Creator Burnout & Self-Evolving Workloads
 """
 import logging
-import random
+import re
 from typing import Optional, List
 from datetime import datetime
 
@@ -27,11 +27,56 @@ from utils.linguistics import (
 logger = logging.getLogger(__name__)
 
 
+def _missing_required_markers(text: str, required_markers: Optional[List[str]] = None) -> List[str]:
+    """Return missing required markers (case-insensitive substring match)."""
+    if not required_markers:
+        return []
+    normalized = (text or "").lower()
+    return [m for m in required_markers if m.lower() not in normalized]
+
+
+async def _generate_with_validation(
+    llm,
+    prompt: str,
+    task: str,
+    max_tokens: int,
+    required_markers: Optional[List[str]] = None,
+    min_len: int = 40,
+) -> dict:
+    """
+    Generate once, validate output shape, and auto-retry once if malformed.
+    Returns llm.generate() result payload.
+    """
+    first = await llm.generate(prompt, task=task, max_tokens=max_tokens)
+    text = (first.get("text") or "").strip()
+    missing = _missing_required_markers(text, required_markers)
+    if text and len(text) >= min_len and not missing:
+        return first
+
+    retry_prompt = (
+        f"{prompt}\n\n"
+        "IMPORTANT: Follow the required output structure exactly."
+        + (f" Include these markers: {', '.join(required_markers)}." if required_markers else "")
+        + " Return only the final structured output."
+    )
+    second = await llm.generate(retry_prompt, task=task, max_tokens=max_tokens)
+    second_text = (second.get("text") or "").strip()
+    second_missing = _missing_required_markers(second_text, required_markers)
+    if second_text and len(second_text) >= min_len and not second_missing:
+        second["fallback_used"] = True if second.get("fallback_used") else True
+        return second
+
+    raise RuntimeError(
+        f"Malformed LLM output for task '{task}' "
+        f"(missing markers: {second_missing or missing}, len={len(second_text)})"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════
 # 1. MULTI-AGENT COMPETITOR INTELLIGENCE
 # ═══════════════════════════════════════════════════════════════
 
-# Simulated multi-agent architecture:
+# Multi-agent architecture:
 #   Agent A (Scraper)   → We use LLM to simulate extracted competitor data
 #   Agent B (Analyst)   → LLM analyzes patterns
 #   Agent C (Strategist)→ LLM generates actionable briefs
@@ -52,62 +97,98 @@ async def competitor_signal_intelligence(
     platforms_str = ", ".join(platforms) if platforms else "Instagram, YouTube, Twitter"
     handles_str = ", ".join(competitor_handles)
 
-    # ── Agent A: Scraper Agent (simulated via LLM) ────────────────
-    scraper_prompt = f"""You are Agent A — a Social Media Scraper Intelligence Agent.
-
-You are monitoring these competitor creators: {handles_str}
+    # ── Agent A: Scraper Agent (LLM intelligence proxy) ────────────────
+    scraper_prompt = f"""Agent A (signal scraper).
+Competitors: {handles_str}
 Platforms: {platforms_str}
 Niche: {niche}
 Region: {region}
 
-Simulate realistic scraped data from these competitor profiles. Generate:
-1. Their top 5 performing posts this week (with engagement metrics)
-2. Common hooks/patterns they use
-3. Posting frequency and timing patterns
-4. Hashtag strategies
-5. Content format distribution (reels vs carousel vs stories etc.)
+Build a realistic intelligence estimate from typical public creator behavior (use ranges, avoid presenting invented facts as verified).
+Return sections:
+TOP_POST_PATTERNS
+HOOK_PATTERNS
+POSTING_CADENCE
+HASHTAG_STRATEGY
+FORMAT_DISTRIBUTION
+"""
 
-Format as a structured report with clear sections. Be specific and realistic."""
-
-    agent_a_result = await llm.generate(scraper_prompt, task="signal_intel_scraper", max_tokens=800)
+    agent_a_result = await _generate_with_validation(
+        llm,
+        scraper_prompt,
+        task="signal_intel_scraper",
+        max_tokens=520,
+        required_markers=[
+            "TOP_POST_PATTERNS",
+            "HOOK_PATTERNS",
+            "POSTING_CADENCE",
+            "HASHTAG_STRATEGY",
+            "FORMAT_DISTRIBUTION",
+        ],
+    )
 
     # ── Agent B: Analyst Agent ────────────────────────────────────
-    analyst_prompt = f"""You are Agent B — a Content Analytics Intelligence Agent.
+    analyst_prompt = f"""Agent B (competitive analyst).
+Niche: {niche}
+Input from Agent A:
+{agent_a_result['text'][:1200]}
 
-You received this raw scraped data from Agent A about competitors in the {niche} niche:
+Return concise sections:
+VIRALITY_PATTERNS
+CONTENT_GAPS
+TIMING_INSIGHTS
+AUDIENCE_SENTIMENT
+WEAKNESS_MAP
+Use specific, actionable insights with estimated confidence where needed.
+"""
 
-{agent_a_result['text'][:1500]}
-
-Analyze this data deeply:
-1. VIRALITY PATTERNS: What specific hooks drove the highest engagement? Look for emotional triggers, controversy, relatability.
-2. CONTENT GAPS: What topics/formats are they NOT covering that have demand?
-3. TIMING INSIGHTS: When do they post and what's the engagement correlation?
-4. AUDIENCE SENTIMENT: What does their engagement style tell you about their audience?
-5. WEAKNESS MAP: Where are they vulnerable? What can our creator exploit?
-
-Be specific with numbers and actionable insights."""
-
-    agent_b_result = await llm.generate(analyst_prompt, task="signal_intel_analyst", max_tokens=800)
+    agent_b_result = await _generate_with_validation(
+        llm,
+        analyst_prompt,
+        task="signal_intel_analyst",
+        max_tokens=520,
+        required_markers=[
+            "VIRALITY_PATTERNS",
+            "CONTENT_GAPS",
+            "TIMING_INSIGHTS",
+            "AUDIENCE_SENTIMENT",
+            "WEAKNESS_MAP",
+        ],
+    )
 
     # ── Agent C: Strategist Agent ─────────────────────────────────
-    strategist_prompt = f"""You are Agent C — a Content Strategy Agent for a {niche} creator in {region}.
+    strategist_prompt = f"""Agent C (content strategist) for niche={niche}, region={region}.
+Input from Agent B:
+{agent_b_result['text'][:1200]}
 
-Agent B's competitive analysis:
-{agent_b_result['text'][:1500]}
+Create 5 content briefs.
+For each brief include:
+TITLE
+FORMAT
+HOOK (2 lines)
+ANGLE
+URGENCY (HIGH/MEDIUM/LOW)
 
-Generate 5 specific content briefs that exploit the competitor gaps found.
-For each brief provide:
-1. TITLE: Catchy hook/title
-2. FORMAT: Best platform + format (reel/carousel/thread etc.)
-3. HOOK: Opening 2 lines that will stop the scroll
-4. ANGLE: Why this will work (based on competitive gap)
-5. URGENCY: Priority level (🔴 HIGH / 🟡 MEDIUM / 🟢 LOW) and why
+Then include:
+WEEKLY_STRATEGY_SUMMARY (3 sentences)
+CONTENT_CALENDAR_SUGGESTION (this week)
+"""
 
-Also provide:
-- WEEKLY STRATEGY SUMMARY: 3-sentence overall recommendation
-- CONTENT CALENDAR SUGGESTION: When to post each brief this week"""
-
-    agent_c_result = await llm.generate(strategist_prompt, task="signal_intel_strategist", max_tokens=800)
+    agent_c_result = await _generate_with_validation(
+        llm,
+        strategist_prompt,
+        task="signal_intel_strategist",
+        max_tokens=560,
+        required_markers=[
+            "TITLE",
+            "FORMAT",
+            "HOOK",
+            "ANGLE",
+            "URGENCY",
+            "WEEKLY_STRATEGY_SUMMARY",
+            "CONTENT_CALENDAR_SUGGESTION",
+        ],
+    )
 
     return {
         "competitor_handles": competitor_handles,
@@ -203,6 +284,19 @@ async def hyper_local_trend_injection(
     region_key = region.lower().replace(" ", "_")
     region_data = REGION_CONTEXT.get(region_key, REGION_CONTEXT["pan-india"])
 
+    if not inject_trends:
+        return {
+            "original_content": content,
+            "region": region,
+            "niche": niche,
+            "region_context": region_data,
+            "trending_topics": "",
+            "enhanced_content": content,
+            "trend_provider": "disabled",
+            "injection_provider": "disabled",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
     # ── Trend Discovery Agent ─────────────────────────────────────
     trend_prompt = f"""You are a Hyper-Local Trend Discovery Agent for {region}, India.
 
@@ -213,42 +307,44 @@ Major festivals: {', '.join(region_data['festivals'])}
 Local trending topics: {', '.join(region_data['local_topics'])}
 Creator niche: {niche}
 
-Generate the TOP 5 trending topics in {region} RIGHT NOW that a {niche} creator can leverage.
-For each trend include:
-1. TREND: The topic/event
-2. WHY TRENDING: Short explanation
-3. RELEVANCE SCORE: 1-10 for the {niche} niche
-4. HOOK SUGGESTION: A specific content hook using this trend
-5. HASHTAGS: 3 relevant hashtags
+Return top 5 trend opportunities for {niche}.
+For each: TREND | WHY | RELEVANCE(1-10) | HOOK | HASHTAGS(3).
+Be region-specific, avoid generic filler.
+"""
 
-Be hyper-specific to {region}. Don't be generic."""
-
-    trends_result = await llm.generate(trend_prompt, task="rag_trend_discovery", max_tokens=600)
+    trends_result = await _generate_with_validation(
+        llm,
+        trend_prompt,
+        task="rag_trend_discovery",
+        max_tokens=420,
+        required_markers=["TREND", "WHY", "RELEVANCE", "HOOK", "HASHTAGS"],
+    )
 
     # ── Content Injection Agent ───────────────────────────────────
-    injection_prompt = f"""You are a Content Enhancement Agent specializing in {region} cultural context.
-
-ORIGINAL CONTENT:
+    injection_prompt = f"""Role: regional content enhancer for {region}.
+Niche: {niche}
+Primary language: {region_data['languages'][0]} (code-switch with English if natural)
+Original content:
 {content}
 
-TRENDING TOPICS IN {region.upper()} RIGHT NOW:
-{trends_result['text'][:1000]}
+Trend candidates:
+{trends_result['text'][:900]}
 
-TASK: Rewrite the content to naturally inject 2-3 of the most relevant trending topics.
-The final content should:
-1. Feel native to {region} — use local slang, references, and cultural touchpoints
-2. Weave trending topics seamlessly (not forced)
-3. Include 3-5 hyper-local hashtags
-4. Maintain the creator's original intent and niche ({niche})
-5. Be in {region_data['languages'][0]} with English mixed in (code-switching)
+Rewrite by naturally injecting 2-3 relevant trends while preserving core message.
+Output EXACT sections:
+ENHANCED_CONTENT:
+INJECTED_TRENDS:
+LOCAL_HASHTAGS:
+CULTURAL_NOTES:
+"""
 
-Format:
-ENHANCED CONTENT: [the rewritten content]
-INJECTED TRENDS: [list which trends were used]
-LOCAL HASHTAGS: [hashtags]
-CULTURAL NOTES: [any cultural context the creator should know]"""
-
-    injection_result = await llm.generate(injection_prompt, task="rag_trend_injection", max_tokens=700)
+    injection_result = await _generate_with_validation(
+        llm,
+        injection_prompt,
+        task="rag_trend_injection",
+        max_tokens=520,
+        required_markers=["ENHANCED_CONTENT", "INJECTED_TRENDS", "LOCAL_HASHTAGS", "CULTURAL_NOTES"],
+    )
 
     return {
         "original_content": content,
@@ -313,28 +409,27 @@ async def multimodal_production(
         fmt = PRODUCTION_FORMATS.get(fmt_key, {"name": fmt_key, "description": ""})
 
         prompt = f"""You are a Multimodal Content Production Agent.
-
-SEED CONTENT / IDEA:
+Format: {fmt['name']}
+Description: {fmt['description']}
+Niche: {niche}
+Language: {target_language}
+Seed idea:
 {seed_content}
 
-TARGET FORMAT: {fmt['name']}
-DESCRIPTION: {fmt['description']}
-NICHE: {niche}
-PRIMARY LANGUAGE: {target_language}
-
-Produce a COMPLETE, production-ready output for this format.
-
-Requirements:
-- If it's a script: Include dialogue, stage directions, timing cues
-- If it's a storyboard: Include shot descriptions, camera angles, text overlays
-- If it's multilingual: Adapt to Hindi, Tamil, Telugu, Bengali, and Marathi with cultural nuances
-- If it's a design brief: Include colors, typography, composition, mood references
-- Include platform-specific optimization notes (Instagram, YouTube, LinkedIn)
-
-Output the complete production document. Be detailed and professional."""
+Produce a complete, production-ready document for this format.
+Include relevant structure (script cues / storyboard shots / multilingual adaptation / design notes) and platform optimization notes where useful.
+Return only final document.
+"""
 
         try:
-            result = await llm.generate(prompt, task=f"multimodal_{fmt_key}", max_tokens=800)
+            result = await _generate_with_validation(
+                llm,
+                prompt,
+                task=f"multimodal_{fmt_key}",
+                max_tokens=520,
+                required_markers=None,
+                min_len=80,
+            )
             return {
                 "format_key": fmt_key,
                 "format_name": fmt["name"],
@@ -347,8 +442,9 @@ Output the complete production document. Be detailed and professional."""
             return {
                 "format_key": fmt_key,
                 "format_name": fmt["name"],
-                "content": f"Generation failed: {str(e)[:100]}",
+                "content": "",
                 "provider": "error",
+                "error": str(e)[:160],
                 "success": False,
             }
 
@@ -357,6 +453,8 @@ Output the complete production document. Be detailed and professional."""
     results = await asyncio.gather(*tasks)
 
     successful = sum(1 for r in results if r["success"])
+    if successful == 0:
+        raise RuntimeError("All multimodal format generations failed")
 
     return {
         "seed_content": seed_content,
@@ -417,49 +515,68 @@ async def auto_publish_preview(
     for platform in platforms:
         specs = PLATFORM_SPECS.get(platform.lower(), PLATFORM_SPECS["instagram"])
 
-        prompt = f"""You are an MCP Auto-Publishing Agent for {platform}.
-
-ORIGINAL CONTENT:
+        prompt = f"""Role: platform adapter for {platform}.
+Niche: {niche}
+Platform specs: {specs}
+Original content:
 {content}
 
-PLATFORM SPECS:
-{specs}
-
-NICHE: {niche}
-
-Generate a COMPLETE, ready-to-publish version of this content optimized for {platform}:
-
-1. OPTIMIZED CONTENT: Rewrite to fit {platform}'s character limits and style
-2. HASHTAGS/TAGS: Generate optimal hashtags (respect platform limits)
-3. BEST TIME TO POST: Recommend specific time based on niche and engagement data
-4. FORMAT RECOMMENDATION: Which format works best (e.g., Reel vs Carousel)
-5. ENGAGEMENT HOOKS: Add platform-specific engagement boosters (polls, questions, CTAs)
-6. SEO METADATA: Title, description, alt-text if applicable
-7. COMPLIANCE CHECK: Any platform policy issues to watch for
-
-Make it publication-ready — no placeholders."""
+Generate publication-ready output with sections:
+OPTIMIZED_CONTENT:
+HASHTAGS_OR_TAGS:
+BEST_TIME_TO_POST:
+FORMAT_RECOMMENDATION:
+ENGAGEMENT_HOOKS:
+SEO_METADATA:
+COMPLIANCE_CHECK:
+No placeholders.
+"""
 
         try:
-            result = await llm.generate(prompt, task=f"autopublish_{platform}", max_tokens=600)
+            result = await _generate_with_validation(
+                llm,
+                prompt,
+                task=f"autopublish_{platform}",
+                max_tokens=420,
+                required_markers=[
+                    "OPTIMIZED_CONTENT",
+                    "HASHTAGS_OR_TAGS",
+                    "BEST_TIME_TO_POST",
+                    "FORMAT_RECOMMENDATION",
+                    "ENGAGEMENT_HOOKS",
+                    "SEO_METADATA",
+                    "COMPLIANCE_CHECK",
+                ],
+            )
+            output_text = result["text"]
+            time_match = re.search(r"BEST TIME TO POST:\s*(.+)", output_text, re.IGNORECASE)
+            recommended_time = schedule_time or (time_match.group(1).strip() if time_match else None)
+            if not recommended_time:
+                recommended_time = specs.get("best_times", ["12:00 PM"])[0]
             platform_previews.append({
                 "platform": platform,
-                "optimized_content": result["text"],
+                "optimized_content": output_text,
                 "provider": result["provider"],
                 "specs": specs,
-                "recommended_time": schedule_time or random.choice(specs.get("best_times", ["12:00 PM"])),
+                "recommended_time": recommended_time,
                 "status": "ready_to_publish",
                 "success": True,
             })
         except Exception as e:
             platform_previews.append({
                 "platform": platform,
-                "optimized_content": f"Failed: {str(e)[:100]}",
+                "optimized_content": "",
                 "provider": "error",
+                "error": str(e)[:160],
                 "specs": specs,
                 "recommended_time": None,
                 "status": "failed",
                 "success": False,
             })
+
+    successful_count = sum(1 for p in platform_previews if p["success"])
+    if successful_count == 0:
+        raise RuntimeError("All platform adaptation generations failed")
 
     return {
         "original_content": content,
@@ -468,7 +585,7 @@ Make it publication-ready — no placeholders."""
         "schedule_time": schedule_time,
         "previews": platform_previews,
         "total_platforms": len(platforms),
-        "successful": sum(1 for p in platform_previews if p["success"]),
+        "successful": successful_count,
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -571,37 +688,33 @@ async def predictive_burnout_workload(
         mode_desc = "🟢 Creator appears healthy — maintaining schedule"
 
     # ── LLM Layer: Generate Adapted Schedule ──────────────────────
-    schedule_prompt = f"""You are a Creator Wellness & Productivity Agent.
+    schedule_prompt = f"""Role: creator wellness + productivity planner.
+Burnout score: {burnout_score}/100
+Mode: {workload_mode}
+Signals: {burnout_data['signals']}
+Entropy: {burnout_data['entropy']}
+Sentiment drift: {burnout_data['sentiment_drift']}
+Niche: {niche}
+Weekly target: {weekly_target} -> adjusted {adjusted_target}
 
-BURNOUT ANALYSIS:
-- Burnout Score: {burnout_score}/100
-- Mode: {workload_mode}
-- Signals: {burnout_data['signals']}
-- Linguistic Entropy: {burnout_data['entropy']}
-- Sentiment Drift: {burnout_data['sentiment_drift']}
-
-CREATOR PROFILE:
-- Niche: {niche}
-- Target weekly posts: {weekly_target} → Adjusted to: {adjusted_target}
-- Mode: {mode_desc}
-
-Generate a SELF-EVOLVING WEEKLY CONTENT PLAN:
-
-For each day of the week (Mon–Sun), provide:
-1. TASK: What content to create (or "REST DAY" if burnout is high)
-2. TYPE: Easy/Medium/Hard effort level
-3. FORMAT: Specific content format (tweet, reel, carousel, etc.)
-4. TOPIC SUGGESTION: Low-effort topic idea that still performs well
-5. WELLNESS TIP: Brief mental health tip for that day
+Generate weekly plan (Mon-Sun). For each day provide:
+TASK | EFFORT(Easy/Medium/Hard) | FORMAT | TOPIC | WELLNESS_TIP
 
 Rules:
-- If RECOVERY mode: Max 2-3 posts/week, rest of days are recovery activities
-- If REDUCED mode: 4-5 posts/week, simpler formats (tweets over reels)
-- If NORMAL mode: Full schedule with mix of easy and challenging content
-- Include at least 1 "evergreen" repost suggestion (reuse old high-performing content)
-- End with a "CREATOR WELLNESS SCORE" prediction for next week"""
+- RECOVERY: 2-3 posts/week max + recovery days
+- REDUCED: 4-5 posts/week, simpler formats
+- NORMAL: full schedule with balanced effort
+- Include one evergreen repost suggestion
+- End with CREATOR_WELLNESS_SCORE for next week
+"""
 
-    schedule_result = await llm.generate(schedule_prompt, task="burnout_schedule", max_tokens=800)
+    schedule_result = await _generate_with_validation(
+        llm,
+        schedule_prompt,
+        task="burnout_schedule",
+        max_tokens=560,
+        required_markers=["TASK", "EFFORT", "FORMAT", "TOPIC", "WELLNESS_TIP", "CREATOR_WELLNESS_SCORE"],
+    )
 
     return {
         "burnout_analysis": burnout_data,

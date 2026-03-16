@@ -9,7 +9,7 @@ import { Loader2, Calendar as CalendarIcon, Download } from "lucide-react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import * as XLSX from 'xlsx';
-import api from '@/services/api';
+import api, { APIError } from '@/services/api';
 import { toast } from 'sonner';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 
@@ -150,9 +150,14 @@ const ContentCalendar: React.FC = () => {
         setCalendar(null);
 
         try {
+            const parsedYear = parseInt(year, 10);
+            if (Number.isNaN(parsedYear) || parsedYear < 2000 || parsedYear > 2100) {
+                toast.error("Please enter a valid year between 2000 and 2100.");
+                return;
+            }
             const response = await api.calendar.generate({
                 month,
-                year: parseInt(year),
+                year: parsedYear,
                 niche,
                 goals,
                 content_formats: contentFormats,
@@ -162,7 +167,8 @@ const ContentCalendar: React.FC = () => {
             toast.success("Calendar generated successfully!");
         } catch (error) {
             console.error(error);
-            toast.error("Failed to generate calendar. Please try again.");
+            const message = error instanceof APIError ? error.message : "Failed to generate calendar. Please try again.";
+            toast.error(message);
         } finally {
             setLoading(false);
         }

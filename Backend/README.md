@@ -120,7 +120,7 @@ Backend/
 | POST | `/text` | Moderate text content | Optional |
 | POST | `/image` | Moderate image content | Optional |
 | POST | `/audio` | Moderate audio content | Optional |
-| POST | `/video` | Moderate video content | Optional |
+| POST | `/video` | Moderate video via sampled frame analysis | Optional |
 | POST | `/multimodal` | Moderate mixed content | Optional |
 
 ### Competitor Analysis (`/api/v1/competitor`)
@@ -163,7 +163,7 @@ Backend/
 - **Calendar Generation**: AI-powered content planning
 
 ### AWS AI Services (Optional)
-- **Rekognition**: Image & video moderation
+- **Rekognition**: Image moderation + video frame moderation
 - **Transcribe**: Audio transcription
 - **Comprehend**: Text sentiment analysis
 

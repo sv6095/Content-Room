@@ -46,15 +46,15 @@ const App = () => {
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
               
-              {/* Open Routes (No Authentication Required) */}
-              <Route path="/studio" element={<Studio />} />
-              <Route path="/moderation" element={<Moderation />} />
-              <Route path="/scheduler" element={<Scheduler />} />
-              <Route path="/competitor" element={<CompetitorAnalysis />} />
-              <Route path="/calendar" element={<ContentCalendar />} />
-              <Route path="/intelligence" element={<IntelligenceHub />} />
-              <Route path="/novel" element={<NovelHub />} />
-              <Route path="/settings" element={<Settings />} />
+              {/* Protected Routes (Authentication Required) */}
+              <Route path="/studio" element={<ProtectedRoute><Studio /></ProtectedRoute>} />
+              <Route path="/moderation" element={<ProtectedRoute><Moderation /></ProtectedRoute>} />
+              <Route path="/scheduler" element={<ProtectedRoute><Scheduler /></ProtectedRoute>} />
+              <Route path="/competitor" element={<ProtectedRoute><CompetitorAnalysis /></ProtectedRoute>} />
+              <Route path="/calendar" element={<ProtectedRoute><ContentCalendar /></ProtectedRoute>} />
+              <Route path="/intelligence" element={<ProtectedRoute><IntelligenceHub /></ProtectedRoute>} />
+              <Route path="/novel" element={<ProtectedRoute><NovelHub /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
               
               {/* Redirects for removed pages */}
               <Route path="/dashboard" element={<Navigate to="/studio" replace />} />
