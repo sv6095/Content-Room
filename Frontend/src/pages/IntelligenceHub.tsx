@@ -682,6 +682,9 @@ export default function IntelligenceHub() {
         <div>
           <h2 className="text-2xl font-bold mb-1">⚡ Intelligence Hub</h2>
           <p className="text-muted-foreground">Strategic AI intelligence for creators — pick your language &amp; region.</p>
+          <p className="ui-instruction mt-2">
+            Tip: start with clear context (region, niche, and audience), then run one tool at a time before generating the full pack.
+          </p>
         </div>
 
         {/* Tab Bar */}
@@ -720,6 +723,9 @@ export default function IntelligenceHub() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="ui-note mb-4">
+              Provide concrete inputs and keep prompts specific. Better context gives better outputs.
+            </div>
             {tabComponents[activeTab]}
           </CardContent>
         </Card>

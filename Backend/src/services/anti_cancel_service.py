@@ -210,6 +210,7 @@ def _compute_rule_risk_score(flags: List[dict]) -> int:
 async def analyze_cancel_risk(
     text: str,
     target_regions: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Analyze content for cancel/controversy risk.
@@ -280,7 +281,12 @@ ALT 1: <safer phrase>
 ALT 2: <safer phrase>
 WHY: <one-sentence reason>
 """
-        alt_result = await llm.generate(alt_prompt, task="anti_cancel", max_tokens=280)
+        alt_result = await llm.generate(
+            alt_prompt,
+            task="anti_cancel",
+            max_tokens=280,
+            user_id=user_id,
+        )
         alternatives = [alt_result["text"]]
 
     # ── Recommendation message ────────────────────────────────────────────────

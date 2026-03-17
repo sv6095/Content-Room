@@ -1,8 +1,10 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from tenacity import RetryError
 from routers.auth import CurrentUser, get_current_user_optional
 from services.calendar_service import CalendarService
+from services.llm_service import AllProvidersFailedError
 from services.dynamo_repositories import get_content_repo
 
 router = APIRouter(tags=["Content Calendar"])
@@ -56,6 +58,7 @@ async def generate_calendar(
             request.goals,
             cleaned_formats,
             request.posts_per_month,
+            user_id=current_user.id if current_user else None,
         )
         
         # Save to history only if user is authenticated
@@ -81,6 +84,25 @@ async def generate_calendar(
         return CalendarResponse(calendar_markdown=calendar_text)
     except HTTPException:
         raise
+    except RetryError as e:
+        root_error = e.last_attempt.exception() if e.last_attempt else e
+        if isinstance(root_error, AllProvidersFailedError):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Calendar generation failed because no AI provider was available. "
+                    "Check Bedrock model access/region or configure a valid GROQ/GROK API key."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=str(root_error))
+    except AllProvidersFailedError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Calendar generation failed because no AI provider was available. "
+                "Check Bedrock model access/region or configure a valid GROQ/GROK API key."
+            ),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

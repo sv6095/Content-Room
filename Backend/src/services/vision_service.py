@@ -12,11 +12,11 @@ import asyncio
 import logging
 import base64
 import re
-import tempfile
+import mimetypes
 from typing import Optional, Dict, Any, List
 
-import numpy as np
 from config import settings
+from services.storage_service import get_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -220,135 +220,94 @@ class VisionService:
             "note": "Analysis unavailable, manual review recommended",
         }
 
-    async def _extract_video_frames(
-        self,
-        video_bytes: bytes,
-        max_frames: int = 6,
-    ) -> Dict[str, Any]:
+    async def start_video_moderation(self, video_bytes: bytes, filename: str) -> Dict[str, Any]:
         """
-        Extract evenly-spaced key frames from uploaded video bytes.
+        Upload video to S3 and start async Rekognition Video moderation job.
         """
-        try:
-            import cv2  # Optional dependency; imported lazily.
-        except Exception as e:
-            raise VisionError(f"Video processing dependency unavailable: {e}")
+        if not self.aws_client:
+            raise VisionError("AWS Rekognition not configured")
 
-        temp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-                tmp.write(video_bytes)
-                temp_path = tmp.name
+        storage = get_storage_service()
+        content_type = mimetypes.guess_type(filename)[0] or "video/mp4"
+        upload = await storage.upload(
+            file_data=video_bytes,
+            filename=filename,
+            content_type=content_type,
+            folder="moderation/video",
+            preferred_provider="s3",
+        )
+        if upload.get("provider") != "s3":
+            raise VisionError("S3 storage is required for Rekognition video moderation")
 
-            cap = cv2.VideoCapture(temp_path)
-            if not cap.isOpened():
-                raise VisionError("Failed to open video stream")
+        response = await asyncio.to_thread(
+            self.aws_client.start_content_moderation,
+            Video={
+                "S3Object": {
+                    "Bucket": upload["bucket"],
+                    "Name": upload["key"],
+                }
+            },
+            MinConfidence=50.0,
+        )
+        return {
+            "job_id": response["JobId"],
+            "status": "IN_PROGRESS",
+            "provider": "aws_rekognition_video",
+            "s3_bucket": upload["bucket"],
+            "s3_key": upload["key"],
+        }
 
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-            if fps <= 0:
-                fps = 25.0
-            duration_seconds = (total_frames / fps) if total_frames > 0 else 0.0
+    async def get_video_moderation(self, job_id: str) -> Dict[str, Any]:
+        """
+        Fetch Rekognition Video moderation job status/results.
+        """
+        if not self.aws_client:
+            raise VisionError("AWS Rekognition not configured")
 
-            if total_frames <= 0:
-                cap.release()
-                raise VisionError("Video contains no readable frames")
-
-            sample_count = max(1, min(max_frames, total_frames))
-            frame_indices = np.linspace(0, total_frames - 1, num=sample_count, dtype=int).tolist()
-
-            frames: List[Dict[str, Any]] = []
-            for idx in frame_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    continue
-                success, encoded = cv2.imencode(".jpg", frame)
-                if not success:
-                    continue
-                frames.append(
-                    {
-                        "frame_index": int(idx),
-                        "timestamp": round(float(idx) / fps, 3),
-                        "bytes": encoded.tobytes(),
-                    }
-                )
-
-            cap.release()
-
-            if not frames:
-                raise VisionError("No frames could be extracted from video")
-
+        first_page = await asyncio.to_thread(
+            self.aws_client.get_content_moderation,
+            JobId=job_id,
+            SortBy="TIMESTAMP",
+        )
+        status = first_page.get("JobStatus", "UNKNOWN")
+        if status != "SUCCEEDED":
             return {
-                "frames": frames,
-                "video_info": {
-                    "duration_seconds": round(duration_seconds, 3),
-                    "total_frames": total_frames,
-                    "frames_analyzed": len(frames),
-                },
+                "job_id": job_id,
+                "status": status,
+                "status_message": first_page.get("StatusMessage"),
+                "provider": "aws_rekognition_video",
+                "moderation_labels": [],
             }
-        except VisionError:
-            raise
-        except Exception as e:
-            raise VisionError(f"Video frame extraction failed: {e}")
-        finally:
-            if temp_path:
-                try:
-                    import os
 
-                    os.unlink(temp_path)
-                except Exception:
-                    pass
+        labels = list(first_page.get("ModerationLabels", []))
+        next_token = first_page.get("NextToken")
+        while next_token:
+            page = await asyncio.to_thread(
+                self.aws_client.get_content_moderation,
+                JobId=job_id,
+                SortBy="TIMESTAMP",
+                NextToken=next_token,
+            )
+            labels.extend(page.get("ModerationLabels", []))
+            next_token = page.get("NextToken")
 
-    async def analyze_video(self, video_bytes: bytes, max_frames: int = 6) -> Dict[str, Any]:
-        """
-        Moderate video by extracting frames and analyzing each frame.
-        """
-        extracted = await self._extract_video_frames(video_bytes, max_frames=max_frames)
-        frames = extracted["frames"]
-        video_info = extracted["video_info"]
-
-        frame_results: List[Dict[str, Any]] = []
-        all_flags: List[str] = []
-        all_labels: List[str] = []
-        providers: List[str] = []
-        min_safety = 100.0
-
-        for frame in frames:
-            analysis = await self.analyze(frame["bytes"])
-            safety_score = float(analysis.get("safety_score", 50))
-            min_safety = min(min_safety, safety_score)
-
-            moderation_labels = analysis.get("moderation_labels", [])
-            content_labels = analysis.get("content_labels", [])
-            flags = [x.get("name", "") for x in moderation_labels if isinstance(x, dict) and x.get("name")]
-            labels = [x.get("name", "") for x in content_labels if isinstance(x, dict) and x.get("name")]
-            if not labels:
-                labels = [str(x) for x in content_labels if x]
-
-            all_flags.extend(flags)
-            all_labels.extend(labels)
-            providers.append(str(analysis.get("provider", "unknown")))
-
-            frame_results.append(
+        normalized: List[Dict[str, Any]] = []
+        for item in labels:
+            label = item.get("ModerationLabel", {})
+            normalized.append(
                 {
-                    "frame_index": frame["frame_index"],
-                    "timestamp": frame["timestamp"],
-                    "safety_score": round(safety_score, 2),
-                    "flags": sorted(set(flags)),
-                    "labels": sorted(set(labels)),
-                    "provider": analysis.get("provider", "unknown"),
+                    "name": label.get("Name", ""),
+                    "parent": label.get("ParentName", ""),
+                    "confidence": float(label.get("Confidence", 0.0)),
+                    "timestamp_ms": int(item.get("Timestamp", 0)),
                 }
             )
 
         return {
-            "safety_score": round(min_safety, 2),
-            "flags": sorted(set([f for f in all_flags if f])),
-            "content_labels": sorted(set([l for l in all_labels if l])),
-            "provider": "video_frame_pipeline",
-            "provider_chain": sorted(set(providers)),
-            "video_info": video_info,
-            "frame_results": frame_results,
-            "fallback_used": any("fallback" in p for p in providers),
+            "job_id": job_id,
+            "status": status,
+            "provider": "aws_rekognition_video",
+            "moderation_labels": normalized,
         }
     
     async def analyze_file(self, file_path: str) -> Dict[str, Any]:

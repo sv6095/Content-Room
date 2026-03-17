@@ -27,12 +27,20 @@ transcribe = boto3.client("transcribe", region_name=settings.aws_region)
 def _bedrock_task(event: Dict[str, Any]) -> Dict[str, Any]:
     llm = get_llm_service()
     content = event.get("content", "")
+    user_id = event.get("user_id")
     prompt = (
         "Run AntiCancelShield, ShadowbanPredictor, and AssetSpinoffs analysis.\n"
         "Return strict JSON with keys anti_cancel, shadowban, assets.\n"
         f"Content:\n{content}"
     )
-    result = _run_async(llm.generate(prompt, task="stepfunctions_preflight", max_tokens=800))
+    result = _run_async(
+        llm.generate(
+            prompt,
+            task="stepfunctions_preflight",
+            max_tokens=800,
+            user_id=user_id,
+        )
+    )
     parsed = {"raw": result.get("text", "")}
     try:
         parsed = json.loads(result.get("text", "{}"))

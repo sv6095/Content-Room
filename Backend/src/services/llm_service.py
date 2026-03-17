@@ -21,6 +21,30 @@ from services.dynamo_repositories import get_users_repo, get_analysis_repo
 
 logger = logging.getLogger(__name__)
 
+LANGUAGE_LABELS = {
+    "en": "English",
+    "hi": "Hindi",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "bn": "Bengali",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "gu": "Gujarati",
+    "or": "Odia",
+}
+
+
+def _normalize_language_label(language: Optional[str]) -> Optional[str]:
+    if not language:
+        return None
+    raw = language.strip()
+    if not raw:
+        return None
+    code = raw.lower()
+    if code in LANGUAGE_LABELS:
+        return LANGUAGE_LABELS[code]
+    return raw
+
 
 class LLMProvider(str, Enum):
     """Available LLM providers."""
@@ -323,7 +347,11 @@ class LLMService:
         )
         return cost_usd
 
-    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=10))
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
     async def generate(
         self,
         prompt: str,
@@ -396,6 +424,7 @@ class LLMService:
         content_type: str = "text",
         max_length: int = 280,
         platform: Optional[str] = None,
+        language: Optional[str] = None,
         model: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -457,6 +486,13 @@ class LLMService:
         else:
             length_guidance = f"""- Keep total length under {max_length} characters.
 - Be concise but impactful."""
+
+        language_label = _normalize_language_label(language)
+        language_instruction = (
+            f"- Output language: {language_label}. Keep the full caption in this language."
+            if language_label and language_label.lower() != "english"
+            else "- Output language: English."
+        )
         
         prompt = f"""You are an expert social media copywriter creating a caption for {platform or 'social media'}.
 
@@ -466,6 +502,7 @@ Requirements:
 - Target length: {max_length} characters
 {length_guidance}
 {tone_instructions}
+{language_instruction}
 
 Content: {content}
 
@@ -482,6 +519,7 @@ Write the caption now (no explanations, just the caption):"""
         self,
         content: str,
         max_length: int = 150,
+        language: Optional[str] = None,
         model: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -491,10 +529,17 @@ Write the caption now (no explanations, just the caption):"""
             content: The content to summarize
             max_length: Maximum summary length in characters
         """
+        language_label = _normalize_language_label(language)
+        language_instruction = (
+            f"Write the summary in {language_label}."
+            if language_label and language_label.lower() != "english"
+            else "Write the summary in English."
+        )
         prompt = f"""Summarize the following content concisely.
 Focus on the key points and main message.
 
 IMPORTANT: Keep the summary under {max_length} characters.
+{language_instruction}
 
 Content: {content}
 
@@ -505,13 +550,21 @@ Summary:"""
         self,
         content: str,
         count: int = 5,
+        language: Optional[str] = None,
         model: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate hashtags for content."""
+        language_label = _normalize_language_label(language)
+        language_instruction = (
+            f"Generate hashtags appropriate for {language_label} audience/context."
+            if language_label and language_label.lower() != "english"
+            else "Generate hashtags appropriate for English audience/context."
+        )
         prompt = f"""Generate {count} relevant hashtags for the following content.
 Return only the hashtags, each on a new line, starting with #.
 Make them trending-friendly and discoverable.
+{language_instruction}
 
 Content: {content}
 

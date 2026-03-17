@@ -1,6 +1,6 @@
 import holidays
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 import re
 from services.llm_service import get_llm_service
 
@@ -17,6 +17,7 @@ class CalendarService:
         content_goals: str,
         content_formats: List[str],
         posts_per_month: int,
+        user_id: Optional[str] = None,
     ) -> str:
         """
         Generates a content calendar for a specific month focusing on dynamic Indian festivals and niche.
@@ -61,6 +62,7 @@ class CalendarService:
             prompt,
             task="calendar_generation",
             max_tokens=token_budget,
+            user_id=user_id,
         )
         text = (response.get("text") or "").strip()
 
@@ -79,6 +81,7 @@ class CalendarService:
                 retry_prompt,
                 task="calendar_generation",
                 max_tokens=max(token_budget, 1400),
+                user_id=user_id,
             )
             text = (retry_response.get("text") or "").strip()
 

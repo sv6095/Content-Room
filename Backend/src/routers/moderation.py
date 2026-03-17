@@ -83,7 +83,10 @@ async def moderate_text(
         cached = cache_repo.get(text_hash)
         result = cached.get("result") if cached and cached.get("result") else None
         if not result:
-            result = await moderation.moderate_text(normalized_text)
+            result = await moderation.moderate_text(
+                normalized_text,
+                user_id=current_user.id if current_user else None,
+            )
             cache_repo.put(text_hash, {"result": result, "flagged": result["decision"] != "ALLOW"})
         
         # Save to database for analytics (uses authenticated user if available)
@@ -125,7 +128,7 @@ async def moderate_image(
 ):
     """
     Moderate image content for safety.
-    Uses AWS Rekognition with OpenCV fallback.
+    Uses AWS Rekognition (image moderation API).
     NO AUTHENTICATION REQUIRED.
     Saves results to database for analytics.
     """
@@ -178,7 +181,11 @@ async def moderate_audio(
     """
     try:
         audio_bytes = await audio.read()
-        result = await moderation.moderate_audio(audio_bytes, audio.filename)
+        result = await moderation.moderate_audio(
+            audio_bytes,
+            audio.filename,
+            user_id=current_user.id if current_user else None,
+        )
         
         # Save to database for analytics
         try:
@@ -207,38 +214,42 @@ async def moderate_audio(
 
 
 @router.post("/video")
-async def moderate_video(
+async def submit_video_moderation(
     video: UploadFile = File(...),
+    save_to_db: bool = Form(True),
     current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
-    Moderate video content for safety.
-    Extracts frames and analyzes them for moderation.
+    Start async moderation for a video using Rekognition Video.
     NO AUTHENTICATION REQUIRED.
     """
     try:
         video_bytes = await video.read()
-        result = await moderation.moderate_video(video_bytes)
+        if not video_bytes:
+            raise HTTPException(status_code=400, detail="Video file is required.")
+        result = await moderation.start_video_moderation(video_bytes, video.filename or "video.mp4")
 
-        # Save to database for analytics
-        try:
-            get_content_repo().create_content(
-                {
-                    "user_id": current_user.id if current_user else "anonymous",
-                    "record_type": "content",
-                    "status": "moderated",
-                    "content_type": "video",
-                    "original_text": f"Video: {video.filename}",
-                    "moderation_status": get_moderation_status(result["decision"]),
-                    "safety_score": result.get("safety_score", 100),
-                    "moderation_flags": result.get("flags", []),
-                    "moderation_explanation": result.get("explanation"),
-                }
-            )
-        except Exception as db_error:
-            logger.warning(f"Failed to save video moderation to DB: {db_error}")
+        if save_to_db:
+            try:
+                get_content_repo().create_content(
+                    {
+                        "content_id": result["job_id"],
+                        "user_id": current_user.id if current_user else "anonymous",
+                        "record_type": "video_moderation_job",
+                        "status": "processing",
+                        "content_type": "video",
+                        "original_text": f"Video: {video.filename}",
+                        "moderation_job_id": result["job_id"],
+                        "moderation_provider": result.get("provider"),
+                        "source_video_bucket": result.get("s3_bucket"),
+                        "source_video_key": result.get("s3_key"),
+                    }
+                )
+            except Exception as db_error:
+                logger.warning(f"Failed to save video moderation job to DB: {db_error}")
 
         return {
+            "message": "Video moderation started",
             "filename": video.filename,
             **result,
         }
@@ -247,11 +258,57 @@ async def moderate_video(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/video/{job_id}")
+async def get_video_moderation_result(
+    job_id: str,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
+    """
+    Fetch async Rekognition Video moderation job result/status.
+    """
+    try:
+        result = await moderation.get_video_moderation_result(job_id)
+        status = result.get("status", "")
+        if status == "SUCCEEDED":
+            try:
+                get_content_repo().update_content(
+                    job_id,
+                    {
+                        "status": "moderated",
+                        "moderation_status": get_moderation_status(result.get("decision", "ALLOW")),
+                        "safety_score": result.get("safety_score", 100),
+                        "moderation_flags": result.get("flags", []),
+                        "moderation_explanation": result.get("explanation"),
+                        "moderation_provider": result.get("provider"),
+                        "moderation_labels": result.get("moderation_labels", []),
+                    },
+                )
+            except Exception as db_error:
+                logger.warning(f"Failed to update completed video moderation job: {db_error}")
+        elif status in {"FAILED", "PARTIAL_SUCCESS"}:
+            try:
+                get_content_repo().update_content(
+                    job_id,
+                    {
+                        "status": "failed",
+                        "moderation_provider": result.get("provider"),
+                        "moderation_error": result.get("status_message", "Video moderation did not succeed"),
+                    },
+                )
+            except Exception as db_error:
+                logger.warning(f"Failed to update failed video moderation job: {db_error}")
+        return result
+    except Exception as e:
+        logger.error(f"Video moderation status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/multimodal")
 async def moderate_multimodal(
     text: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     audio: Optional[UploadFile] = File(None),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Moderate multiple content types at once.
@@ -264,7 +321,10 @@ async def moderate_multimodal(
     normalized_text = (text or "").strip()
     
     if normalized_text:
-        text_result = await moderation.moderate_text(normalized_text)
+        text_result = await moderation.moderate_text(
+            normalized_text,
+            user_id=current_user.id if current_user else None,
+        )
         results["text"] = text_result
         overall_safety = min(overall_safety, _safe_score(text_result.get("safety_score")))
         all_flags.extend(text_result.get("flags", []))
@@ -278,7 +338,11 @@ async def moderate_multimodal(
     
     if audio:
         audio_bytes = await audio.read()
-        audio_result = await moderation.moderate_audio(audio_bytes, audio.filename)
+        audio_result = await moderation.moderate_audio(
+            audio_bytes,
+            audio.filename,
+            user_id=current_user.id if current_user else None,
+        )
         results["audio"] = audio_result
         overall_safety = min(overall_safety, _safe_score(audio_result.get("safety_score")))
         all_flags.extend(audio_result.get("flags", []))

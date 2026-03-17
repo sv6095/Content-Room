@@ -133,7 +133,7 @@ class ModerationService:
             logger.error(f"AWS Comprehend error: {e}")
             raise
 
-    async def analyze_text_llm(self, text: str) -> Dict[str, Any]:
+    async def analyze_text_llm(self, text: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         prompt = f"""You are a content moderation AI. Analyze the following text for safety issues.
 
 Text to analyze: "{text}"
@@ -145,7 +145,7 @@ FLAGS: [comma-separated categories or "none"]
 EXPLANATION: [clear explanation]
 """
         try:
-            result = await self.llm.generate(prompt, task="moderation")
+            result = await self.llm.generate(prompt, task="moderation", user_id=user_id)
             response_text = result["text"]
             lines = response_text.strip().split("\n")
             decision = "ALLOW"
@@ -183,21 +183,21 @@ EXPLANATION: [clear explanation]
                 "provider": "fallback",
             }
 
-    async def analyze_text(self, text: str) -> Dict[str, Any]:
+    async def analyze_text(self, text: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         if self.comprehend_client:
             try:
                 return await self.analyze_text_aws(text)
             except Exception:
                 logger.warning("AWS Comprehend failed, using LLM fallback")
-        return await self.analyze_text_llm(text)
+        return await self.analyze_text_llm(text, user_id=user_id)
 
     async def analyze_image(self, image_bytes: bytes) -> Dict[str, Any]:
         return await self.vision.analyze(image_bytes)
 
-    async def analyze_audio(self, audio_bytes: bytes, filename: str) -> Dict[str, Any]:
+    async def analyze_audio(self, audio_bytes: bytes, filename: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         transcript_result = await self.speech.transcribe_bytes(audio_bytes, filename)
         transcript = transcript_result["text"]
-        text_result = await self.analyze_text(transcript)
+        text_result = await self.analyze_text(transcript, user_id=user_id)
         return {
             "transcript": transcript,
             "segments": transcript_result.get("segments", []),
@@ -216,10 +216,10 @@ EXPLANATION: [clear explanation]
             return ModerationDecision.FLAG
         return ModerationDecision.ESCALATE
 
-    async def moderate_text(self, text: str) -> Dict[str, Any]:
+    async def moderate_text(self, text: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         start_time = datetime.now()
         prefilter = await self.prefilter_text(text)
-        analysis = await self.analyze_text(text)
+        analysis = await self.analyze_text(text, user_id=user_id)
         decision = self.make_decision(analysis["safety_score"], analysis.get("flags", []))
         processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
         return {
@@ -281,9 +281,14 @@ EXPLANATION: [clear explanation]
             "fallback_used": analysis.get("fallback_used", False),
         }
 
-    async def moderate_audio(self, audio_bytes: bytes, filename: str = "audio.wav") -> Dict[str, Any]:
+    async def moderate_audio(
+        self,
+        audio_bytes: bytes,
+        filename: str = "audio.wav",
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         start_time = datetime.now()
-        analysis = await self.analyze_audio(audio_bytes, filename)
+        analysis = await self.analyze_audio(audio_bytes, filename, user_id=user_id)
         decision = self.make_decision(analysis["safety_score"], analysis.get("flags", []))
         processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
         flagged_segments = []
@@ -310,33 +315,47 @@ EXPLANATION: [clear explanation]
         }
 
     async def moderate_video(self, video_bytes: bytes) -> Dict[str, Any]:
+        raise RuntimeError(
+            "Direct synchronous video moderation is deprecated. "
+            "Use start_video_moderation() and get_video_moderation_result()."
+        )
+
+    async def start_video_moderation(self, video_bytes: bytes, filename: str) -> Dict[str, Any]:
+        return await self.vision.start_video_moderation(video_bytes, filename)
+
+    async def get_video_moderation_result(self, job_id: str) -> Dict[str, Any]:
         start_time = datetime.now()
-        analysis = await self.vision.analyze_video(video_bytes)
-        safety_score = _safe_float(analysis.get("safety_score"), 50.0)
-        flags = [str(f) for f in analysis.get("flags", []) if f]
+        analysis = await self.vision.get_video_moderation(job_id)
+        status = analysis.get("status", "UNKNOWN")
+        if status != "SUCCEEDED":
+            return {
+                "job_id": job_id,
+                "status": status,
+                "provider": analysis.get("provider", "aws_rekognition_video"),
+                "status_message": analysis.get("status_message"),
+            }
+
+        labels = analysis.get("moderation_labels", [])
+        flags = sorted(set([str(x.get("name", "")) for x in labels if x.get("name")]))
+        max_conf = max([float(x.get("confidence", 0.0)) for x in labels], default=0.0)
+        safety_score = max(0.0, 100.0 - max_conf)
         decision = self.make_decision(safety_score, flags)
         processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
-
-        video_info = analysis.get("video_info", {})
-        frame_results = analysis.get("frame_results", [])
-        providers = analysis.get("provider_chain", [])
-
         return {
+            "job_id": job_id,
+            "status": status,
             "decision": decision.value,
-            "safety_score": safety_score,
-            "confidence": 0.85 if providers else 0.7,
-            "explanation": (
-                f"Video analyzed across {video_info.get('frames_analyzed', 0)} frame(s); "
-                f"{len(flags)} moderation flag(s) detected."
-            ),
+            "safety_score": round(safety_score, 2),
+            "confidence": round(max_conf, 2),
             "flags": flags,
-            "content_labels": analysis.get("content_labels", []),
-            "provider": analysis.get("provider", "video_frame_pipeline"),
-            "provider_chain": providers,
-            "video_info": video_info,
-            "frame_results": frame_results,
+            "moderation_labels": labels,
+            "provider": analysis.get("provider", "aws_rekognition_video"),
             "processing_time_ms": processing_time,
-            "fallback_used": analysis.get("fallback_used", False),
+            "explanation": (
+                f"Rekognition video moderation completed with {len(flags)} unique moderation flag(s)."
+                if flags
+                else "Rekognition video moderation completed with no moderation flags."
+            ),
         }
 
 

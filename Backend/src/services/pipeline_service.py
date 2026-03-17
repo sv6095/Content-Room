@@ -27,6 +27,7 @@ async def run_preflight_pipeline(
     niche: Optional[str] = None,
     risk_level: int = 50,
     festival: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Run all intelligence checks in parallel and return a unified report.
@@ -60,7 +61,12 @@ async def run_preflight_pipeline(
         try:
             from services.culture_engine import rewrite_for_region
             return await rewrite_for_region(
-                content, region, festival, niche, target_language=target_language
+                content,
+                region,
+                festival,
+                niche,
+                target_language=target_language,
+                user_id=user_id,
             )
         except Exception as e:
             logger.warning(f"Pipeline: culture_engine failed: {e}")
@@ -71,7 +77,13 @@ async def run_preflight_pipeline(
     async def run_risk_reach():
         try:
             from services.risk_reach_service import generate_risk_reach_content
-            return await generate_risk_reach_content(content, risk_level, platform, niche)
+            return await generate_risk_reach_content(
+                content,
+                risk_level,
+                platform,
+                niche,
+                user_id=user_id,
+            )
         except Exception as e:
             logger.warning(f"Pipeline: risk_reach failed: {e}")
             results["errors"]["risk_reach"] = str(e)
@@ -81,7 +93,7 @@ async def run_preflight_pipeline(
     async def run_anti_cancel():
         try:
             from services.anti_cancel_service import analyze_cancel_risk
-            return await analyze_cancel_risk(content)
+            return await analyze_cancel_risk(content, user_id=user_id)
         except Exception as e:
             logger.warning(f"Pipeline: anti_cancel failed: {e}")
             results["errors"]["anti_cancel"] = str(e)
@@ -116,7 +128,12 @@ async def run_preflight_pipeline(
                 "SHADOWBAN_SCORE: [0-100]\n"
                 "RECOMMENDATION: [one sentence]"
             )
-            res = await llm.generate(prompt, task="shadowban_predict", max_tokens=180)
+            res = await llm.generate(
+                prompt,
+                task="shadowban_predict",
+                max_tokens=180,
+                user_id=user_id,
+            )
             m = re.search(r"SHADOWBAN_SCORE:\s*(\d+)", res["text"], re.IGNORECASE)
             llm_score = int(m.group(1)) if m else 50
             final = min(95, int(llm_score * 0.70 + (100 - rule_score) * 0.30))
@@ -170,7 +187,10 @@ async def run_preflight_pipeline(
             # Only generate top 3 for speed in the pipeline context
             top_keys = ["tweet_thread", "instagram_caption" if "instagram_caption" in ASSET_PERSONAS else "carousel_copy", "hook_variants"]
             top_keys = [k for k in top_keys if k in ASSET_PERSONAS][:3]
-            tasks = [_generate_single_asset(content, k, niche, llm) for k in top_keys]
+            tasks = [
+                _generate_single_asset(content, k, niche, llm, user_id=user_id)
+                for k in top_keys
+            ]
             assets = await asyncio.gather(*tasks, return_exceptions=False)
             return {
                 "assets": [a for a in assets if a.get("success")],

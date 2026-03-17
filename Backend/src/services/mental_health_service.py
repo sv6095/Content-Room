@@ -107,7 +107,12 @@ Metrics:
 Give 3 warm, practical recommendations to protect mental health and creativity.
 Format: numbered list, max 2 short sentences each.
 """
-    advisory = await llm.generate(advisory_prompt, task="mental_health_advisory", max_tokens=180)
+    advisory = await llm.generate(
+        advisory_prompt,
+        task="mental_health_advisory",
+        max_tokens=180,
+        user_id=str(user_id) if user_id else None,
+    )
 
     return {
         "burnout_score": burnout_score,

@@ -231,6 +231,7 @@ async def _generate_single_asset(
     asset_key: str,
     niche: Optional[str],
     llm,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Generate one platform-native asset.
@@ -253,7 +254,12 @@ Output: content only, no explanations.
     RULE_WEIGHT = 0.35
 
     try:
-        result = await llm.generate(prompt, task=f"asset_explosion_{asset_key}", max_tokens=asset["max_tokens"])
+        result = await llm.generate(
+            prompt,
+            task=f"asset_explosion_{asset_key}",
+            max_tokens=asset["max_tokens"],
+            user_id=user_id,
+        )
         generated_text = result["text"]
 
         # ── Rule-Based Compliance Check (RL layer) ──────────────────
@@ -299,6 +305,7 @@ async def explode_to_12_assets(
     seed_content: str,
     niche: Optional[str] = None,
     selected_assets: Optional[list] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Generate 12 platform-native assets from one seed idea.
@@ -310,7 +317,7 @@ async def explode_to_12_assets(
     
     # Run all asset generations in parallel
     tasks = [
-        _generate_single_asset(seed_content, key, niche, llm)
+        _generate_single_asset(seed_content, key, niche, llm, user_id=user_id)
         for key in asset_keys
         if key in ASSET_PERSONAS
     ]

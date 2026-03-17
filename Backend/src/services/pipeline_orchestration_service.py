@@ -66,7 +66,7 @@ class PipelineOrchestrationService:
             }
 
         # Local fallback to preserve functionality in non-deployed environments.
-        report = await run_preflight_pipeline(**payload)
+        report = await run_preflight_pipeline(**payload, user_id=user_id)
         final = self.analysis_repo.create_analysis(
             {
                 "analysis_id": analysis_id,

@@ -12,8 +12,10 @@ interface ModerationResult {
   explanation: string;
   flaggedContent: string;
   flags: string[];
-  status: 'safe' | 'warning' | 'unsafe';
+  status: 'safe' | 'warning' | 'unsafe' | 'processing';
   decision: string;
+  safetyScore?: number;
+  confidence?: number;
   provider?: string;
   processingTime?: number;
   fileResults?: {
@@ -50,8 +52,12 @@ export default function Moderation() {
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
 
-  const decisionToStatus = (decision?: string): 'safe' | 'warning' | 'unsafe' =>
-    decision === 'ALLOW' ? 'safe' : decision === 'FLAG' ? 'warning' : 'unsafe';
+  const decisionToStatus = (decision?: string): 'safe' | 'warning' | 'unsafe' | 'processing' => {
+    if (!decision || decision === 'IN_PROGRESS' || decision === 'PROCESSING') {
+      return 'processing';
+    }
+    return decision === 'ALLOW' ? 'safe' : decision === 'FLAG' ? 'warning' : 'unsafe';
+  };
 
   const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,6 +108,8 @@ export default function Moderation() {
       flags: singleRes.flags,
       status,
       decision: singleRes.decision,
+      safetyScore: singleRes.safety_score,
+      confidence: singleRes.confidence,
       provider: singleRes.provider,
       processingTime: singleRes.processing_time_ms,
     };
@@ -133,16 +141,48 @@ export default function Moderation() {
         );
         setResult(transformResult(apiResult, true));
       } else if (videoFile) {
-        const videoRes = await moderationAPI.moderateVideo(videoFile);
-        const decision = (videoRes as unknown as { decision?: string }).decision || 'ALLOW';
+        const videoStart = await moderationAPI.moderateVideo(videoFile);
+        if (!videoStart.job_id) {
+          throw new APIError('Video moderation job could not be started.', 500);
+        }
+
         setResult({
-          explanation: (videoRes as unknown as { explanation?: string }).explanation || `Video "${videoFile.name}" analyzed.`,
+          explanation: `Video "${videoFile.name}" uploaded. Moderation is running...`,
           flaggedContent: '',
-          flags: (videoRes as unknown as { flags?: string[] }).flags || [],
+          flags: [],
+          status: 'processing',
+          decision: 'IN_PROGRESS',
+          provider: videoStart.provider,
+        });
+
+        const maxAttempts = 30;
+        const intervalMs = 2000;
+        let videoResult = await moderationAPI.getVideoModeration(videoStart.job_id);
+        let attempts = 0;
+        while (videoResult.status === 'IN_PROGRESS' && attempts < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, intervalMs));
+          videoResult = await moderationAPI.getVideoModeration(videoStart.job_id);
+          attempts += 1;
+        }
+
+        if (videoResult.status !== 'SUCCEEDED') {
+          throw new APIError(
+            videoResult.status_message || `Video moderation did not complete successfully (${videoResult.status}).`,
+            500,
+          );
+        }
+
+        const decision = videoResult.decision || 'ESCALATE';
+        setResult({
+          explanation: videoResult.explanation || `Video "${videoFile.name}" analyzed.`,
+          flaggedContent: '',
+          flags: videoResult.flags || [],
           status: decisionToStatus(decision),
           decision,
-          provider: (videoRes as unknown as { provider?: string }).provider,
-          processingTime: (videoRes as unknown as { processing_time_ms?: number }).processing_time_ms,
+          safetyScore: videoResult.safety_score,
+          confidence: videoResult.confidence,
+          provider: videoResult.provider,
+          processingTime: videoResult.processing_time_ms,
         });
       } else if (imageFile) {
         // Image only
@@ -154,6 +194,8 @@ export default function Moderation() {
           flags: (imageRes as unknown as { flags?: string[] }).flags || [],
           status: decisionToStatus(decision),
           decision,
+          safetyScore: (imageRes as unknown as { safety_score?: number }).safety_score,
+          confidence: (imageRes as unknown as { confidence?: number }).confidence,
           provider: (imageRes as unknown as { provider?: string }).provider,
         });
       } else if (audioFile) {
@@ -168,6 +210,8 @@ export default function Moderation() {
           flags: (audioRes as unknown as { flags?: string[] }).flags || [],
           status: decisionToStatus(decision),
           decision,
+          safetyScore: (audioRes as unknown as { safety_score?: number }).safety_score,
+          confidence: (audioRes as unknown as { confidence?: number }).confidence,
           provider: (audioRes as unknown as { provider?: string }).provider,
         });
       } else {
@@ -198,6 +242,8 @@ export default function Moderation() {
 
   const getStatusIcon = (status: ModerationResult['status']) => {
     switch (status) {
+      case 'processing':
+        return <Loader2 className="h-6 w-6 text-primary animate-spin" />;
       case 'safe':
         return <CheckCircle className="h-6 w-6 text-emerald-500" />;
       case 'warning':
@@ -209,6 +255,8 @@ export default function Moderation() {
 
   const getStatusLabel = (status: ModerationResult['status']) => {
     switch (status) {
+      case 'processing':
+        return 'Analysis In Progress';
       case 'safe':
         return 'Content Approved';
       case 'warning':
@@ -220,6 +268,8 @@ export default function Moderation() {
 
   const getStatusColor = (status: ModerationResult['status']) => {
     switch (status) {
+      case 'processing':
+        return 'bg-primary/10 border-primary/20';
       case 'safe':
         return 'bg-emerald-500/10 border-emerald-500/20';
       case 'warning':
@@ -227,6 +277,13 @@ export default function Moderation() {
       case 'unsafe':
         return 'bg-rose-500/10 border-rose-500/20';
     }
+  };
+
+  const getSafetyScoreColor = (score?: number): string => {
+    if (typeof score !== 'number') return 'text-muted-foreground';
+    if (score >= 70) return 'text-emerald-600';
+    if (score >= 40) return 'text-amber-600';
+    return 'text-rose-600';
   };
 
   return (
@@ -392,7 +449,7 @@ export default function Moderation() {
                   <>
                     <Video className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground mb-2">Upload Video</p>
-                    <p className="text-xs text-muted-foreground mb-2">(Video moderation extracts sampled frames for analysis)</p>
+                    <p className="text-xs text-muted-foreground mb-2">(Video moderation runs async with AWS Rekognition Video)</p>
                     <Button variant="outline" size="sm">Browse</Button>
                   </>
                 )}
@@ -440,6 +497,14 @@ export default function Moderation() {
                   <p className="text-sm text-muted-foreground">
                     Decision: {result.decision}
                   </p>
+                  {typeof result.safetyScore === 'number' && (
+                    <p className={`text-sm ${getSafetyScoreColor(result.safetyScore)}`}>
+                      Safety Score: {result.safetyScore.toFixed(1)}
+                      {typeof result.confidence === 'number' ? (
+                        <span className="text-muted-foreground">{` | Confidence: ${result.confidence.toFixed(1)}`}</span>
+                      ) : null}
+                    </p>
+                  )}
                 </div>
               </div>
 

@@ -7,9 +7,8 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
-import { useLanguage, languages } from '@/contexts/LanguageContext';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { useToast } from '@/hooks/use-toast';
 import { analyticsAPI, APIError, type LLMUsageStats } from '@/services/api';
 import {
@@ -31,7 +30,7 @@ import {
 export default function Settings() {
   const navigate = useNavigate();
   const { user, logout, updateProfile } = useAuth();
-  const { language, setLanguage, t, autoTranslateUI, setAutoTranslateUI } = useLanguage();
+  const { t } = useLanguage();
   const { toast } = useToast();
   
   // Profile state
@@ -165,36 +164,6 @@ export default function Settings() {
                     placeholder={t('settings.emailAddress', 'Email Address')}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="language">{t('settings.interfaceLanguage', 'Interface Language')}</Label>
-                  <Select value={language} onValueChange={(value: typeof language) => setLanguage(value)}>
-                    <SelectTrigger id="language" className="w-full sm:w-64">
-                      <SelectValue placeholder={t('settings.selectLanguage', 'Select language')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {languages.map((lang) => (
-                        <SelectItem key={lang.code} value={lang.code}>
-                          {lang.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center justify-between rounded-lg border border-border p-3">
-                  <div>
-                    <Label htmlFor="auto-translate-ui" className="text-sm font-medium">
-                      {t('settings.autoTranslateUI', 'Auto-translate entire interface (AWS)')}
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      {t('settings.autoTranslateUIDesc', 'Uses backend Translate API to translate visible UI labels across pages.')}
-                    </p>
-                  </div>
-                  <Switch
-                    id="auto-translate-ui"
-                    checked={autoTranslateUI}
-                    onCheckedChange={setAutoTranslateUI}
-                  />
-                </div>
                 <Button variant="hero" onClick={handleProfileSave} disabled={isProfileLoading}>
                   {isProfileLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                   {t('settings.saveProfile', 'Save Profile')}
@@ -215,23 +184,13 @@ export default function Settings() {
                   </div>
                 ) : llmUsage ? (
                   <div className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="rounded-lg border p-3">
-                        <p className="text-xs text-muted-foreground mb-1">Your usage</p>
-                        <p className="text-sm font-semibold">${llmUsage.user_cost_usd.toFixed(4)}</p>
-                        <p className="text-xs text-muted-foreground">
-                          Remaining: ${llmUsage.user_remaining_usd.toFixed(4)} / ${llmUsage.user_budget_usd.toFixed(2)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Calls: {llmUsage.user_call_count}</p>
-                      </div>
-                      <div className="rounded-lg border p-3">
-                        <p className="text-xs text-muted-foreground mb-1">Global usage</p>
-                        <p className="text-sm font-semibold">${llmUsage.global_cost_usd.toFixed(4)}</p>
-                        <p className="text-xs text-muted-foreground">
-                          Remaining: ${llmUsage.global_remaining_usd.toFixed(4)} / ${llmUsage.global_budget_usd.toFixed(2)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Calls: {llmUsage.global_call_count}</p>
-                      </div>
+                    <div className="rounded-lg border p-3">
+                      <p className="text-xs text-muted-foreground mb-1">Your usage</p>
+                      <p className="text-sm font-semibold">${llmUsage.user_cost_usd.toFixed(4)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Remaining: ${llmUsage.user_remaining_usd.toFixed(4)} / ${llmUsage.user_budget_usd.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Calls: {llmUsage.user_call_count}</p>
                     </div>
                   </div>
                 ) : (

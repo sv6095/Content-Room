@@ -7,6 +7,7 @@ Rewrites content using regional emotional triggers for Bharat.
 """
 import logging
 import re
+from collections import Counter
 from typing import Optional
 from config import settings
 from services.llm_service import get_llm_service
@@ -93,12 +94,50 @@ TARGET_SCRIPT_PATTERNS = {
     "or": re.compile(r"[\u0B00-\u0B7F]"),  # Odia
 }
 
+LANGUAGE_CODE_TO_SCRIPT = {
+    "hi": "Devanagari",
+    "te": "Telugu script",
+    "ta": "Tamil script",
+    "bn": "Bengali script",
+    "kn": "Kannada script",
+    "ml": "Malayalam script",
+    "gu": "Gujarati script",
+    "or": "Odia script",
+}
+
 
 def _looks_like_generic_fallback(text: str) -> bool:
     normalized = (text or "").strip().lower()
     if not normalized:
         return True
     return normalized.startswith("generated response for:")
+
+
+def _looks_low_quality_adaptation(text: str) -> bool:
+    """Detect repetitive/gibberish-like rewrites and trigger a repair retry."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return True
+
+    # Extremely short outputs are usually unusable for adaptation.
+    if len(cleaned.split()) < 12:
+        return True
+
+    # Repeated sentence fragments often indicate model collapse.
+    parts = [p.strip().lower() for p in re.split(r"[.!?\n]+", cleaned) if p.strip()]
+    if len(parts) >= 3:
+        counts = Counter(parts)
+        if counts.most_common(1)[0][1] >= 2:
+            return True
+
+    # Excessive repetition of long words (e.g., "pongal", "enna", "irukku"...).
+    words = re.findall(r"[A-Za-z\u0900-\u0DFF']{3,}", cleaned.lower())
+    if len(words) >= 14:
+        top_freq = Counter(words).most_common(1)[0][1]
+        if (top_freq / len(words)) > 0.22:
+            return True
+
+    return False
 
 
 def _resolve_language_code(target_language: Optional[str]) -> Optional[str]:
@@ -117,8 +156,11 @@ def _resolve_language_code(target_language: Optional[str]) -> Optional[str]:
 
 
 def _requires_post_translation(text: str, target_code: Optional[str]) -> bool:
-    if not text or not target_code or target_code == "en":
+    if not text or not target_code:
         return False
+    if target_code == "en":
+        # If English is requested but Indic scripts appear, force translation to English.
+        return bool(re.search(r"[\u0900-\u0DFF]", text))
     script_pattern = TARGET_SCRIPT_PATTERNS.get(target_code)
     if script_pattern and script_pattern.search(text):
         return False
@@ -207,6 +249,7 @@ async def rewrite_for_region(
     festival: Optional[str] = None,
     content_niche: Optional[str] = None,
     target_language: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Rewrite content using regional emotional persona.
@@ -222,11 +265,26 @@ async def rewrite_for_region(
         festival_context = f"\nFestival Context: This is for {festival.title()}. The emotional theme is: {FESTIVAL_TONES[festival.lower()]}"
 
     # Determine language instruction
-    lang_instruction = (
-        f"Write the output IN {target_language}. "
-        f"Apply the regional emotional persona below but use {target_language} as the output language."
-    ) if target_language and target_language.lower() not in ("", "auto", "default") else (
-        f"Use the natural language style of the region: {persona['language_style']}."
+    target_lang_code = _resolve_language_code(target_language)
+    if target_lang_code and target_lang_code != "en":
+        script_name = LANGUAGE_CODE_TO_SCRIPT.get(target_lang_code, "native script")
+        lang_instruction = (
+            f"Write the output in {target_language} using {script_name} only. "
+            f"Do NOT use Romanized transliteration (for example: 'enna', 'irukku', 'epdi'). "
+            f"Do NOT mix English except unavoidable brand names."
+        )
+    elif target_lang_code == "en":
+        lang_instruction = (
+            "Write the output in natural English only. "
+            "Do NOT include transliterated words or non-English scripts."
+        )
+    else:
+        lang_instruction = f"Use the natural language style of the region: {persona['language_style']}."
+
+    persona_style_instruction = (
+        "English-first with regional cultural nuance (references, emotion, context) but no code-mixing."
+        if target_lang_code == "en"
+        else persona["language_style"]
     )
 
     prompt = f"""Role: Bharat content strategist for regional adaptation.
@@ -236,7 +294,7 @@ Target region: {region.title()}
 
 Persona:
 - Tone: {persona['tone']}
-- Style: {persona['language_style']}
+- Style: {persona_style_instruction}
 - Use hooks: {', '.join(persona['hooks'])}
 - Avoid: {', '.join(persona['avoid'])}
 {festival_context}
@@ -250,17 +308,52 @@ Rules:
 - Start with a region-relevant hook.
 - Include at least 2 listed hooks naturally.
 - If target language is specified, write ONLY in that language (except unavoidable brand names/proper nouns).
+- If English is requested, output must be fully English with no transliteration.
+- Keep it concise and natural: 3-5 sentences, avoid repetition.
 - No hashtags, no explanation.
 - Return only rewritten content.
 """
 
     llm = get_llm_service()
-    result = await llm.generate(prompt, task="culture_emotion_engine", max_tokens=360)
+    result = await llm.generate(
+        prompt,
+        task="culture_emotion_engine",
+        max_tokens=360,
+        user_id=user_id,
+    )
     rewritten_text = result.get("text", "")
     if _looks_like_generic_fallback(rewritten_text):
         rewritten_text = _rule_based_rewrite(content, persona, festival)
+    elif _looks_low_quality_adaptation(rewritten_text):
+        repair_prompt = f"""Rewrite the content again with clean, fluent copy.
 
-    target_lang_code = _resolve_language_code(target_language)
+Target region: {region.title()}
+Target language instruction: {lang_instruction}
+{"Festival: " + festival.title() if festival else ""}
+{"Niche: " + content_niche if content_niche else ""}
+
+Original content:
+{content}
+
+Hard requirements:
+- Output must be natural and human-sounding.
+- No repetitive phrases.
+- No transliterated words if a native-script language is requested.
+- Keep the same meaning and promotional intent.
+- 3-5 sentences only.
+- Return only the final rewritten text.
+"""
+        repair_result = await llm.generate(
+            repair_prompt,
+            task="culture_emotion_engine",
+            max_tokens=320,
+            user_id=user_id,
+        )
+        repaired = (repair_result.get("text") or "").strip()
+        if repaired and not _looks_low_quality_adaptation(repaired):
+            rewritten_text = repaired
+            result = repair_result
+
     if _requires_post_translation(rewritten_text, target_lang_code):
         try:
             from services.translation_service import get_translation_service
@@ -268,7 +361,7 @@ Rules:
             tx = await translator.translate(
                 text=rewritten_text,
                 target_lang=target_lang_code,
-                source_lang="en",
+                source_lang=None,
             )
             translated_text = (tx or {}).get("translated_text", "").strip()
             if translated_text:

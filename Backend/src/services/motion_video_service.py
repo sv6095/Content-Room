@@ -26,6 +26,7 @@ class MotionVideoService:
     def __init__(self):
         self.mediaconvert_client = None
         self.bedrock_runtime_client = None
+        self.s3_client = None
 
         if settings.aws_configured and settings.use_aws_mediaconvert:
             try:
@@ -52,9 +53,49 @@ class MotionVideoService:
                     "bedrock-runtime",
                     region_name="us-east-1",
                 )
+                self.s3_client = boto3.client("s3", region_name=settings.aws_region)
                 logger.info("Bedrock runtime client initialized for Nova Reel")
             except Exception as e:
                 logger.warning(f"Nova Reel init failed: {e}")
+
+    @staticmethod
+    def _split_s3_uri(s3_uri: str) -> tuple[Optional[str], Optional[str]]:
+        if not s3_uri or not s3_uri.startswith("s3://"):
+            return None, None
+        no_scheme = s3_uri[5:]
+        slash_idx = no_scheme.find("/")
+        if slash_idx == -1:
+            return no_scheme, ""
+        bucket = no_scheme[:slash_idx]
+        key = no_scheme[slash_idx + 1 :]
+        return bucket, key
+
+    def _resolve_generated_video_from_prefix(self, s3_uri: str) -> Optional[str]:
+        if not self.s3_client:
+            return None
+        bucket, key = self._split_s3_uri(s3_uri)
+        if not bucket:
+            return None
+        prefix = key or ""
+        try:
+            res = self.s3_client.list_objects_v2(
+                Bucket=bucket,
+                Prefix=prefix,
+                MaxKeys=50,
+            )
+            contents = res.get("Contents", []) or []
+            mp4_keys = [
+                obj.get("Key")
+                for obj in contents
+                if isinstance(obj.get("Key"), str) and obj.get("Key", "").lower().endswith(".mp4")
+            ]
+            if not mp4_keys:
+                return None
+            mp4_keys.sort(reverse=True)
+            return f"s3://{bucket}/{mp4_keys[0]}"
+        except Exception as e:
+            logger.warning("Failed to resolve S3 output object from prefix '%s': %s", s3_uri, e)
+            return None
 
     def _resolve_output_bucket(self) -> str:
         bucket = settings.mediaconvert_output_bucket or settings.s3_bucket_name
@@ -145,11 +186,24 @@ class MotionVideoService:
         try:
             response = self.mediaconvert_client.get_job(Id=job_id)
             job = response.get("Job", {})
+            output_s3_uri: Optional[str] = None
+            for group in job.get("OutputGroupDetails", []) or []:
+                for detail in group.get("OutputDetails", []) or []:
+                    for path in detail.get("OutputFilePaths", []) or []:
+                        if isinstance(path, str) and path:
+                            output_s3_uri = path
+                            if path.lower().endswith(".mp4"):
+                                break
+                    if output_s3_uri and output_s3_uri.lower().endswith(".mp4"):
+                        break
+                if output_s3_uri and output_s3_uri.lower().endswith(".mp4"):
+                    break
             return {
                 "job_id": job.get("Id"),
                 "status": job.get("Status"),
                 "error_message": job.get("ErrorMessage"),
                 "output_group_details": job.get("OutputGroupDetails", []),
+                "output_s3_uri": output_s3_uri,
                 "service": "mediaconvert",
             }
         except Exception as e:
@@ -209,11 +263,19 @@ class MotionVideoService:
             response = self.bedrock_runtime_client.get_async_invoke(
                 invocationArn=invocation_arn
             )
+            output_data_config = response.get("outputDataConfig")
+            output_s3_uri = None
+            if isinstance(output_data_config, dict):
+                s3_cfg = output_data_config.get("s3OutputDataConfig") or {}
+                candidate = s3_cfg.get("s3Uri")
+                if isinstance(candidate, str) and candidate:
+                    output_s3_uri = self._resolve_generated_video_from_prefix(candidate) or candidate
             return {
                 "invocation_arn": response.get("invocationArn"),
                 "status": response.get("status"),
                 "failure_message": response.get("failureMessage"),
-                "output_data_config": response.get("outputDataConfig"),
+                "output_data_config": output_data_config,
+                "output_s3_uri": output_s3_uri,
                 "service": "nova_reel",
             }
         except Exception as e:

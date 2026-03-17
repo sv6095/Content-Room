@@ -140,6 +140,8 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-family: inherit;
+    font-size: 15.5px;
+    line-height: 1.58;
   }
 
   h1,
@@ -149,6 +151,27 @@
   h5,
   h6 {
     @apply font-semibold tracking-tight;
+  }
+
+  h1 {
+    font-size: clamp(1.5rem, 1.6vw + 1rem, 2rem);
+    line-height: 1.2;
+  }
+
+  h2 {
+    font-size: clamp(1.25rem, 1vw + 0.95rem, 1.6rem);
+    line-height: 1.26;
+  }
+
+  p {
+    line-height: 1.62;
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font-size: 0.96rem;
   }
 }
 
@@ -171,6 +194,14 @@
 
   .container-wide {
     @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .ui-instruction {
+    @apply text-sm text-muted-foreground italic leading-relaxed;
+  }
+
+  .ui-note {
+    @apply rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground leading-relaxed;
   }
   
   /* Database Animation */

@@ -36,6 +36,13 @@ Parameters:
   BedrockModelIdReasoning:
     Type: String
     Default: us.amazon.nova-2-lite-v1:0
+  GrokApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+  GroqModel:
+    Type: String
+    Default: llama-3.3-70b-versatile
 
 Globals:
   Function:
@@ -65,14 +72,30 @@ Globals:
         BEDROCK_MODEL_ID_MICRO: !Ref BedrockModelIdMicro
         BEDROCK_MODEL_ID_LITE: !Ref BedrockModelIdLite
         BEDROCK_MODEL_ID_REASONING: !Ref BedrockModelIdReasoning
+        GROK_API_KEY: !Ref GrokApiKey
+        GROQ_MODEL: !Ref GroqModel
         STEPFUNCTIONS_PREFLIGHT_ARN: ""
 
 Resources:
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: content-room-dependencies
+      Description: Common Python dependencies shared across Lambda functions.
+      ContentUri: dependencies-layer/
+      CompatibleRuntimes:
+        - python3.10
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: python3.10
+
   ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
+      CodeUri: src/
       Handler: lambda_handler.handler
+      Layers:
+        - !Ref DependenciesLayer
       Policies:
         - AWSLambdaBasicExecutionRole
         - AWSXRayDaemonWriteAccess
@@ -96,6 +119,10 @@ Resources:
                 - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AnalysisTableName}/index/*
             - Effect: Allow
               Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+            - Effect: Allow
+              Action:
                 - states:StartExecution
                 - states:DescribeExecution
               Resource: "*"
@@ -105,6 +132,11 @@ Resources:
                 - s3:GetObject
                 - s3:DeleteObject
               Resource: !Sub arn:aws:s3:::${S3BucketName}/*
+            - Effect: Allow
+              Action:
+                - rekognition:StartContentModeration
+                - rekognition:GetContentModeration
+              Resource: "*"
       Events:
         Root:
           Type: HttpApi
@@ -120,8 +152,10 @@ Resources:
   PreflightWorkerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
+      CodeUri: src/
       Handler: workflows.preflight_worker.lambda_handler
+      Layers:
+        - !Ref DependenciesLayer
       Timeout: 120
       Policies:
         - AWSLambdaBasicExecutionRole

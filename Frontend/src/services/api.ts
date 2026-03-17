@@ -163,6 +163,7 @@ export interface ImageGenerationResponse {
   engine: string;
   model_id: string;
   image_url: string;
+  preview_url?: string;
   image_key?: string;
   provider: string;
 }
@@ -202,6 +203,35 @@ export interface MultimodalModerationResponse {
   };
 }
 
+export interface VideoModerationStartResponse {
+  message: string;
+  filename?: string;
+  job_id: string;
+  status: string;
+  provider: string;
+  s3_bucket?: string;
+  s3_key?: string;
+}
+
+export interface VideoModerationResultResponse {
+  job_id: string;
+  status: string;
+  provider?: string;
+  status_message?: string;
+  decision?: 'ALLOW' | 'FLAG' | 'ESCALATE';
+  safety_score?: number;
+  confidence?: number;
+  flags?: string[];
+  explanation?: string;
+  processing_time_ms?: number;
+  moderation_labels?: Array<{
+    name: string;
+    parent?: string;
+    confidence: number;
+    timestamp_ms?: number;
+  }>;
+}
+
 // Content (My Content pipeline) Types
 export interface ContentItem {
   id: string;
@@ -211,6 +241,7 @@ export interface ContentItem {
   summary?: string;
   hashtags?: { items?: string[] } | string[];
   file_path?: string;
+  file_url?: string;
   translated_text?: string;
   source_language?: string;
   target_language?: string;
@@ -423,7 +454,14 @@ export const authAPI = {
 // ============================================
 
 export const creationAPI = {
-  async generateCaption(content: string, contentType = 'text', maxLength?: number, platform?: string, model?: string): Promise<GenerateResponse> {
+  async generateCaption(
+    content: string,
+    contentType = 'text',
+    maxLength?: number,
+    platform?: string,
+    model?: string,
+    language?: string
+  ): Promise<GenerateResponse> {
     const response = await fetch(`${API_V1}/create/caption`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -433,25 +471,26 @@ export const creationAPI = {
         max_length: maxLength,
         platform: platform,
         model: model,
+        language,
       }),
     });
     return handleResponse<GenerateResponse>(response);
   },
 
-  async generateSummary(content: string, maxLength?: number, model?: string): Promise<GenerateResponse> {
+  async generateSummary(content: string, maxLength?: number, model?: string, language?: string): Promise<GenerateResponse> {
     const response = await fetch(`${API_V1}/create/summary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ content, max_length: maxLength, model }),
+      body: JSON.stringify({ content, max_length: maxLength, model, language }),
     });
     return handleResponse<GenerateResponse>(response);
   },
 
-  async generateHashtags(content: string, count = 5, model?: string): Promise<HashtagsResponse> {
+  async generateHashtags(content: string, count = 5, model?: string, language?: string): Promise<HashtagsResponse> {
     const response = await fetch(`${API_V1}/create/hashtags`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ content, count, model }),
+      body: JSON.stringify({ content, count, model, language }),
     });
     return handleResponse<HashtagsResponse>(response);
   },
@@ -463,12 +502,13 @@ export const creationAPI = {
 
     const response = await fetch(`${API_V1}/create/rewrite`, {
       method: 'POST',
+      headers: getAuthHeaders(),
       body: formData,
     });
     return handleResponse(response);
   },
 
-  async extractAndGenerate(file: File, mediaType: 'image' | 'audio' | 'video'): Promise<{
+  async extractAndGenerate(file: File, mediaType: 'image' | 'audio' | 'video', language?: string): Promise<{
     extracted_content: string;
     caption?: string;
     summary?: string;
@@ -477,8 +517,12 @@ export const creationAPI = {
   }> {
     const formData = new FormData();
     formData.append(mediaType, file);
+    if (language) {
+      formData.append('language', language);
+    }
     const response = await fetch(`${API_V1}/create/extract-and-generate`, {
       method: 'POST',
+      headers: getAuthHeaders(),
       body: formData,
     });
     return handleResponse(response);
@@ -580,11 +624,7 @@ export const moderationAPI = {
     return handleResponse(response);
   },
 
-  async moderateVideo(file: File): Promise<{ 
-    filename: string; 
-    video_info?: { duration_seconds: number; total_frames: number; frames_analyzed: number };
-    frame_results?: Array<{ frame_index: number; timestamp: number; safety_score: number; flags: string[] }>;
-  } & Partial<ModerationResponse>> {
+  async moderateVideo(file: File): Promise<VideoModerationStartResponse> {
     const formData = new FormData();
     formData.append('video', file);
 
@@ -593,7 +633,14 @@ export const moderationAPI = {
       headers: getAuthHeaders(),
       body: formData,
     });
-    return handleResponse(response);
+    return handleResponse<VideoModerationStartResponse>(response);
+  },
+
+  async getVideoModeration(jobId: string): Promise<VideoModerationResultResponse> {
+    const response = await fetch(`${API_V1}/moderate/video/${jobId}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<VideoModerationResultResponse>(response);
   },
 
   async moderateMultimodal(
@@ -1100,7 +1147,7 @@ export const intelligenceAPI = {
   async cultureRewrite(content: string, region: string, festival?: string, niche?: string, targetLanguage?: string): Promise<CultureRewriteResponse> {
     const response = await fetch(`${API_V1}/intel/culture/rewrite`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ content, region, festival, content_niche: niche, target_language: targetLanguage }),
     });
     return handleResponse<CultureRewriteResponse>(response);
@@ -1119,7 +1166,7 @@ export const intelligenceAPI = {
   async riskReachGenerate(content: string, riskLevel: number, platform?: string, niche?: string): Promise<RiskReachResponse> {
     const response = await fetch(`${API_V1}/intel/risk-reach/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ content, risk_level: riskLevel, platform, niche }),
     });
     return handleResponse<RiskReachResponse>(response);
@@ -1128,7 +1175,7 @@ export const intelligenceAPI = {
   async dnaAnalyze(newContent: string, postHistory: string[], userId = 1): Promise<DNAAnalysisResponse> {
     const response = await fetch(`${API_V1}/intel/dna/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ new_content: newContent, post_history: postHistory, user_id: userId }),
     });
     return handleResponse<DNAAnalysisResponse>(response);
@@ -1137,7 +1184,7 @@ export const intelligenceAPI = {
   async antiCancelAnalyze(text: string, targetRegions?: string[]): Promise<AntiCancelResponse> {
     const response = await fetch(`${API_V1}/intel/anti-cancel/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ text, target_regions: targetRegions }),
     });
     return handleResponse<AntiCancelResponse>(response);
@@ -1146,7 +1193,7 @@ export const intelligenceAPI = {
   async getHeatmap(text: string): Promise<{ heatmap: HeatmapToken[]; total_words: number }> {
     const response = await fetch(`${API_V1}/intel/anti-cancel/heatmap`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ text }),
     });
     return handleResponse(response);
@@ -1155,7 +1202,7 @@ export const intelligenceAPI = {
   async mentalHealthAnalyze(posts: string[], userId = 1): Promise<MentalHealthResponse> {
     const response = await fetch(`${API_V1}/intel/mental-health/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ posts, user_id: userId }),
     });
     return handleResponse<MentalHealthResponse>(response);
@@ -1164,7 +1211,7 @@ export const intelligenceAPI = {
   async explodeAssets(seedContent: string, niche?: string, selectedAssets?: string[]): Promise<AssetExplosionResponse> {
     const response = await fetch(`${API_V1}/intel/explode/assets`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ seed_content: seedContent, niche, selected_assets: selectedAssets }),
     });
     return handleResponse<AssetExplosionResponse>(response);
@@ -1178,7 +1225,7 @@ export const intelligenceAPI = {
   async predictShadowban(content: string, hashtags?: string[], platform?: string): Promise<ShadowbanResponse> {
     const response = await fetch(`${API_V1}/intel/shadowban/predict`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ content, hashtags, platform }),
     });
     return handleResponse<ShadowbanResponse>(response);
@@ -1235,7 +1282,7 @@ export const pipelineAPI = {
   async analyze(request: PreFlightRequest): Promise<PreFlightResponse> {
     const response = await fetch(`${API_V1}/pipeline/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(request),
     });
     return handleResponse<PreFlightResponse>(response);
@@ -1354,7 +1401,7 @@ export const novelAPI = {
   async signalIntelligence(handles: string[], niche: string, region?: string, platforms?: string[]): Promise<SignalIntelResponse> {
     const response = await fetch(`${API_V1}/novel/signal-intelligence`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ competitor_handles: handles, niche, region: region || 'pan-india', platforms }),
     });
     return handleResponse<SignalIntelResponse>(response);
@@ -1363,7 +1410,7 @@ export const novelAPI = {
   async trendInjection(content: string, region: string, niche: string): Promise<TrendInjectionResponse> {
     const response = await fetch(`${API_V1}/novel/trend-injection`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ content, region, niche, inject_trends: true }),
     });
     return handleResponse<TrendInjectionResponse>(response);
@@ -1372,7 +1419,7 @@ export const novelAPI = {
   async multimodalProduction(seedContent: string, formats: string[], niche: string, targetLanguage?: string): Promise<MultimodalResponse> {
     const response = await fetch(`${API_V1}/novel/multimodal-production`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ seed_content: seedContent, formats, niche, target_language: targetLanguage || 'Hindi' }),
     });
     return handleResponse<MultimodalResponse>(response);
@@ -1386,7 +1433,7 @@ export const novelAPI = {
   async platformAdapt(content: string, platforms: string[], niche: string, scheduleTime?: string): Promise<PlatformAdaptResponse> {
     const response = await fetch(`${API_V1}/novel/auto-publish`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ content, platforms, niche, schedule_time: scheduleTime }),
     });
     return handleResponse<PlatformAdaptResponse>(response);
@@ -1395,7 +1442,7 @@ export const novelAPI = {
   async burnoutPredict(posts: string[], niche: string, weeklyTarget?: number): Promise<BurnoutResponse> {
     const response = await fetch(`${API_V1}/novel/burnout-predict`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ posts, niche, weekly_target: weeklyTarget || 7 }),
     });
     return handleResponse<BurnoutResponse>(response);

@@ -25,10 +25,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from tenacity import RetryError
 
 from config import settings
 from utils.logging import setup_logging
 from middleware.rate_limiter import RateLimitMiddleware, RateLimitConfig
+from services.llm_service import AllProvidersFailedError
 
 
 # Setup structured logging
@@ -111,6 +113,40 @@ app.mount("/uploads", StaticFiles(directory=str(uploads_path)), name="uploads")
 
 
 # Global Exception Handler
+@app.exception_handler(AllProvidersFailedError)
+async def llm_unavailable_handler(request: Request, exc: AllProvidersFailedError) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.warning("LLM providers unavailable request_id=%s error=%s", request_id, exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "llm_providers_unavailable",
+            "request_id": request_id,
+            "message": (
+                "AI providers are currently unavailable. "
+                "Check Bedrock model access/region or configure a valid GROQ/GROK API key."
+            ),
+        },
+    )
+
+
+@app.exception_handler(RetryError)
+async def llm_retry_error_handler(request: Request, exc: RetryError) -> JSONResponse:
+    root_error = exc.last_attempt.exception() if exc.last_attempt else exc
+    if isinstance(root_error, AllProvidersFailedError):
+        return await llm_unavailable_handler(request, root_error)
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.error("Retry error request_id=%s error=%s", request_id, root_error, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "retry_error",
+            "request_id": request_id,
+            "message": str(root_error) if settings.debug else "A retryable operation failed.",
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     request_id = getattr(request.state, "request_id", "unknown")

@@ -7,11 +7,13 @@ Supports workflow: Create -> Moderate -> Translate -> Schedule.
 import logging
 from datetime import datetime
 from typing import Optional, List
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from routers.auth import CurrentUser, get_current_user
 from services.dynamo_repositories import get_content_repo
+from services.storage_service import get_storage_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -40,6 +42,7 @@ class ContentItem(BaseModel):
     summary: Optional[str] = None
     hashtags: Optional[dict] = None
     file_path: Optional[str] = None
+    file_url: Optional[str] = None
     translated_text: Optional[str] = None
     source_language: Optional[str] = None
     target_language: Optional[str] = None
@@ -63,6 +66,42 @@ def _workflow_status(content: dict, is_scheduled: bool) -> str:
     if content.get("moderation_status") and content.get("moderation_status") != "pending" and content.get("safety_score") is not None:
         return "moderated"
     return "draft"
+
+
+async def _resolve_accessible_file_url(file_path: Optional[str]) -> Optional[str]:
+    if not file_path:
+        return None
+
+    raw = file_path.strip()
+    if not raw:
+        return None
+
+    if raw.startswith("s3://"):
+        try:
+            uri = raw[5:]
+            slash_idx = uri.find("/")
+            if slash_idx == -1:
+                return raw
+            key = uri[slash_idx + 1:]
+            if not key:
+                return raw
+            storage = get_storage_service()
+            return await storage.get_url(file_key=key, provider="s3", expires_in=24 * 60 * 60)
+        except Exception:
+            return raw
+
+    if ".s3." in raw and raw.startswith("http"):
+        try:
+            parsed = urlparse(raw)
+            key = parsed.path.lstrip("/")
+            if not key:
+                return raw
+            storage = get_storage_service()
+            return await storage.get_url(file_key=key, provider="s3", expires_in=24 * 60 * 60)
+        except Exception:
+            return raw
+
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +138,7 @@ async def list_content(
             summary=c.get("summary"),
             hashtags=c.get("hashtags"),
             file_path=c.get("file_path"),
+            file_url=await _resolve_accessible_file_url(c.get("file_path")),
             translated_text=c.get("translated_text"),
             source_language=c.get("source_language"),
             target_language=c.get("target_language"),
@@ -138,6 +178,7 @@ async def get_content(
         summary=content.get("summary"),
         hashtags=content.get("hashtags"),
         file_path=content.get("file_path"),
+        file_url=await _resolve_accessible_file_url(content.get("file_path")),
         translated_text=content.get("translated_text"),
         source_language=content.get("source_language"),
         target_language=content.get("target_language"),
@@ -192,6 +233,7 @@ async def create_content(
         summary=content.get("summary"),
         hashtags=content.get("hashtags"),
         file_path=content.get("file_path"),
+        file_url=await _resolve_accessible_file_url(content.get("file_path")),
         translated_text=content.get("translated_text"),
         source_language=content.get("source_language"),
         target_language=content.get("target_language"),

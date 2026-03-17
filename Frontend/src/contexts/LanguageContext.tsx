@@ -42,8 +42,8 @@ const translations: Record<LanguageCode, Record<string, string>> = {
   en: {},
   hi: {
     'nav.creatorStudio': 'क्रिएटर स्टूडियो',
-    'nav.intelligenceHub': '⚡ इंटेलिजेंस हब',
-    'nav.novelLab': '🚀 नोवेल एआई लैब',
+    'nav.intelligenceHub': 'इंटेलिजेंस हब',
+    'nav.novelLab': 'नोवेल एआई लैब',
     'nav.competitorIntel': 'प्रतिद्वंदी इंटेल',
     'nav.contentCalendar': 'कंटेंट कैलेंडर',
     'nav.moderation': 'मॉडरेशन',
@@ -66,8 +66,8 @@ const translations: Record<LanguageCode, Record<string, string>> = {
   },
   te: {
     'nav.creatorStudio': 'క్రియేటర్ స్టూడియో',
-    'nav.intelligenceHub': '⚡ ఇంటెలిజెన్స్ హబ్',
-    'nav.novelLab': '🚀 నవల్ AI ల్యాబ్',
+    'nav.intelligenceHub': 'ఇంటెలిజెన్స్ హబ్',
+    'nav.novelLab': 'నవల్ AI ల్యాబ్',
     'nav.settings': 'సెట్టింగ్స్',
     'nav.logout': 'లాగ్ అవుట్',
     'settings.title': 'సెట్టింగ్స్',
@@ -77,8 +77,8 @@ const translations: Record<LanguageCode, Record<string, string>> = {
   or: {},
   ta: {
     'nav.creatorStudio': 'கிரியேட்டர் ஸ்டுடியோ',
-    'nav.intelligenceHub': '⚡ இண்டலிஜென்ஸ் ஹப்',
-    'nav.novelLab': '🚀 நோவல் AI லேப்',
+    'nav.intelligenceHub': 'இண்டலிஜென்ஸ் ஹப்',
+    'nav.novelLab': 'நோவல் AI லேப்',
     'nav.settings': 'அமைப்புகள்',
     'nav.logout': 'வெளியேறு',
     'settings.title': 'அமைப்புகள்',

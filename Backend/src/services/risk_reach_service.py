@@ -101,6 +101,7 @@ async def generate_risk_reach_content(
     risk_level: int,
     platform: Optional[str] = None,
     niche: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Generate content at the specified risk level (0–100).
@@ -136,7 +137,12 @@ Output Rules:
 Write one polished output:"""
 
     llm = get_llm_service()
-    result = await llm.generate(prompt, task="risk_reach_dial", max_tokens=280)
+    result = await llm.generate(
+        prompt,
+        task="risk_reach_dial",
+        max_tokens=280,
+        user_id=user_id,
+    )
     generated_text = result["text"]
 
     # Run safety audit

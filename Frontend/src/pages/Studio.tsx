@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/shared/EmptyState';
 import { Upload, FileText, Image, Music, Video, Wand2, Hash, FileSignature, Loader2, Sparkles, Copy, Check, Save, ArrowRight, Languages, Brain, ShieldCheck, Eye, Layers } from 'lucide-react';
 import { creationAPI, contentAPI, translationAPI, intelligenceAPI, motionAPI, APIError } from '@/services/api';
 import type { CultureRewriteResponse, RiskReachResponse, AntiCancelResponse, AssetExplosionResponse, MentalHealthResponse, ShadowbanResponse, ContentItem as SavedAssetItem } from '@/services/api';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 type ContentType = 'text' | 'image' | 'audio' | 'video' | null;
 const FIXED_TEXT_MODEL = 'us.amazon.nova-lite-v1:0';
@@ -27,10 +28,51 @@ interface GeneratedContent {
 
 interface GeneratedImageAsset {
   image_url: string;
+  preview_url?: string;
   engine: string;
   model_id: string;
   provider: string;
   prompt: string;
+}
+
+function extractMediaConvertOutputUri(details: unknown): string | undefined {
+  if (!Array.isArray(details)) return undefined;
+  for (const group of details) {
+    const outputs = typeof group === 'object' && group && 'OutputDetails' in group
+      ? (group as { OutputDetails?: unknown[] }).OutputDetails
+      : undefined;
+    if (!Array.isArray(outputs)) continue;
+    for (const output of outputs) {
+      const paths = typeof output === 'object' && output && 'OutputFilePaths' in output
+        ? (output as { OutputFilePaths?: unknown[] }).OutputFilePaths
+        : undefined;
+      if (!Array.isArray(paths)) continue;
+      for (const path of paths) {
+        if (typeof path !== 'string') continue;
+        if (path.toLowerCase().endsWith('.mp4')) return path;
+      }
+      const first = paths.find((p): p is string => typeof p === 'string');
+      if (first) return first;
+    }
+  }
+  return undefined;
+}
+
+function isConcreteMediaUri(value?: string): boolean {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  if (!v) return false;
+  if (v.endsWith('/')) return false;
+  return (
+    v.endsWith('.mp4') ||
+    v.endsWith('.mov') ||
+    v.endsWith('.m4v') ||
+    v.endsWith('.webm') ||
+    v.includes('.mp4?') ||
+    v.includes('.mov?') ||
+    v.includes('.m4v?') ||
+    v.includes('.webm?')
+  );
 }
 
 interface IntelligencePackResult {
@@ -136,6 +178,7 @@ const TOOLKIT_BY_TYPE: Record<Exclude<ContentType, null>, CreatorTool[]> = {
 };
 
 export default function Studio() {
+  const { language } = useLanguage();
   const [selectedType, setSelectedType] = useState<ContentType>(null);
   const [inputText, setInputText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -183,16 +226,28 @@ export default function Studio() {
   const [imageEngine, setImageEngine] = useState<ImageEngine>('titan');
   const [imageActionLoading, setImageActionLoading] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<GeneratedImageAsset | null>(null);
+  const [generatedImagePreviewFailed, setGeneratedImagePreviewFailed] = useState(false);
+  const [uploadedPreviewUrl, setUploadedPreviewUrl] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [savedAssets, setSavedAssets] = useState<SavedAssetItem[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [savedAssetsError, setSavedAssetsError] = useState<string | null>(null);
 
   const loadSavedAssets = useCallback(async () => {
     setIsLoadingAssets(true);
+    setSavedAssetsError(null);
     try {
       const items = await contentAPI.list();
       setSavedAssets(items.slice(0, 12));
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to load saved assets:', err);
+      if (err instanceof APIError && err.status === 401) {
+        setSavedAssetsError('Please log in again to load saved assets.');
+      } else if (err instanceof APIError) {
+        setSavedAssetsError(err.message || 'Failed to load saved assets.');
+      } else {
+        setSavedAssetsError('Failed to load saved assets.');
+      }
     } finally {
       setIsLoadingAssets(false);
     }
@@ -201,6 +256,16 @@ export default function Studio() {
   useEffect(() => {
     void loadSavedAssets();
   }, [loadSavedAssets]);
+
+  useEffect(() => {
+    if (!uploadedFile || selectedType === 'text') {
+      setUploadedPreviewUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(uploadedFile);
+    setUploadedPreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [uploadedFile, selectedType]);
 
   // Platform presets
   const platformPresets = {
@@ -230,59 +295,6 @@ export default function Studio() {
     const file = e.target.files?.[0];
     if (file) {
       setUploadedFile(file);
-    }
-  };
-
-  const handleGenerate = async (generationType: 'caption' | 'summary' | 'hashtags') => {
-    if (!inputText.trim()) return;
-    
-    setIsProcessing(true);
-    setProcessingType(generationType);
-    setError(null);
-    setTranslatedCaption(null);
-    setTranslatedSummary(null);
-    
-    try {
-      let result;
-      
-      switch (generationType) {
-        case 'caption': {
-          const captionRes = await creationAPI.generateCaption(
-            inputText,
-            selectedType || 'text',
-            captionLength,
-            targetPlatform,
-            FIXED_TEXT_MODEL
-          );
-          result = { caption: captionRes.result, provider: captionRes.provider };
-          break;
-        }
-        case 'summary': {
-          const summaryRes = await creationAPI.generateSummary(inputText, 150, FIXED_TEXT_MODEL);
-          result = { summary: summaryRes.result, provider: summaryRes.provider };
-          break;
-        }
-        case 'hashtags': {
-          const hashtagsRes = await creationAPI.generateHashtags(inputText, hashtagCount, FIXED_TEXT_MODEL);
-          result = { hashtags: hashtagsRes.hashtags, provider: hashtagsRes.provider };
-          break;
-        }
-      }
-
-      setGeneratedContent((prev) => ({
-        ...prev,
-        ...result,
-      }));
-    } catch (err) {
-      if (err instanceof APIError) {
-        setError(err.message);
-      } else {
-        setError('Failed to generate content. Please try again.');
-      }
-      console.error('Generation error:', err);
-    } finally {
-      setIsProcessing(false);
-      setProcessingType(null);
     }
   };
 
@@ -319,7 +331,7 @@ export default function Studio() {
 
       if (hasMediaUpload && uploadedFile) {
         const mediaType = selectedType as 'image' | 'audio' | 'video';
-        const mediaRes = await creationAPI.extractAndGenerate(uploadedFile, mediaType);
+        const mediaRes = await creationAPI.extractAndGenerate(uploadedFile, mediaType, language);
         completed.push('Media analyzed');
         setExtractedContent(mediaRes.extracted_content || null);
 
@@ -344,10 +356,11 @@ export default function Studio() {
           selectedType || 'text',
           captionLength,
           targetPlatform,
-          FIXED_TEXT_MODEL
+          FIXED_TEXT_MODEL,
+          language
         ),
-        creationAPI.generateSummary(processingText, 150, FIXED_TEXT_MODEL),
-        creationAPI.generateHashtags(processingText, hashtagCount, FIXED_TEXT_MODEL),
+        creationAPI.generateSummary(processingText, 150, FIXED_TEXT_MODEL, language),
+        creationAPI.generateHashtags(processingText, hashtagCount, FIXED_TEXT_MODEL, language),
       ]);
 
       nextCaption = captionRes.result || nextCaption;
@@ -365,6 +378,88 @@ export default function Studio() {
         provider: nextProvider,
       });
       setWorkflowSteps(completed);
+    } catch (err) {
+      if (err instanceof APIError) {
+        setError(err.message);
+      } else {
+        setError('Failed to generate content. Please try again.');
+      }
+      console.error('Generation error:', err);
+    } finally {
+      setIsProcessing(false);
+      setProcessingType(null);
+    }
+  };
+
+  const getManualSeedText = () => {
+    const text = inputText.trim();
+    if (text) return text;
+    return extractedContent?.trim() || '';
+  };
+
+  const ensureManualSeedText = async () => {
+    const existingSeed = getManualSeedText();
+    if (existingSeed) return existingSeed;
+
+    if (selectedType && selectedType !== 'text' && uploadedFile) {
+      const mediaRes = await creationAPI.extractAndGenerate(
+        uploadedFile,
+        selectedType as 'image' | 'audio' | 'video',
+        language
+      );
+      const extracted = (mediaRes.extracted_content || '').trim();
+      if (extracted) {
+        setExtractedContent(extracted);
+        setWorkflowSteps((prev) => (prev.includes('Media analyzed') ? prev : [...prev, 'Media analyzed']));
+        return extracted;
+      }
+    }
+
+    return '';
+  };
+
+  const handleGenerate = async (generationType: 'caption' | 'summary' | 'hashtags') => {
+    const seedText = await ensureManualSeedText();
+    if (!seedText) return;
+
+    setIsProcessing(true);
+    setProcessingType(generationType);
+    setError(null);
+    setTranslatedCaption(null);
+    setTranslatedSummary(null);
+
+    try {
+      let result;
+
+      switch (generationType) {
+        case 'caption': {
+          const captionRes = await creationAPI.generateCaption(
+            seedText,
+            selectedType || 'text',
+            captionLength,
+            targetPlatform,
+            FIXED_TEXT_MODEL,
+            language
+          );
+          result = { caption: captionRes.result, provider: captionRes.provider };
+          break;
+        }
+        case 'summary': {
+          const summaryRes = await creationAPI.generateSummary(seedText, 150, FIXED_TEXT_MODEL, language);
+          result = { summary: summaryRes.result, provider: summaryRes.provider };
+          break;
+        }
+        case 'hashtags': {
+          const hashtagsRes = await creationAPI.generateHashtags(seedText, hashtagCount, FIXED_TEXT_MODEL, language);
+          result = { hashtags: hashtagsRes.hashtags, provider: hashtagsRes.provider };
+          break;
+        }
+      }
+
+      setGeneratedContent((prev) => ({
+        ...prev,
+        ...result,
+      }));
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);
@@ -474,6 +569,7 @@ export default function Studio() {
         hashtags: Array.isArray(hashtags) ? hashtags : undefined,
       });
       setSavedContentId(item.id);
+      setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
       await loadSavedAssets();
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
@@ -495,6 +591,15 @@ export default function Studio() {
   const canRunCompleteWorkflow = selectedType === 'text'
     ? inputText.trim().length > 0
     : uploadedFile !== null || inputText.trim().length > 0;
+  const canRunManualGeneration = selectedType === 'text'
+    ? getManualSeedText().length > 0
+    : getManualSeedText().length > 0 || uploadedFile !== null;
+  const canRunIntelligencePack = selectedType === 'text'
+    ? getIntelligenceSeedText().length > 0
+    : getIntelligenceSeedText().length > 0 || uploadedFile !== null;
+  const completeWorkflowDisabledHint = selectedType === 'text'
+    ? 'Add text content to generate your package.'
+    : 'Upload a file or add context text to analyze and generate.';
 
   const resolvePlatformForIntelligence = () =>
     targetPlatform === 'custom' ? 'instagram' : targetPlatform;
@@ -514,8 +619,29 @@ export default function Studio() {
     return primary;
   };
 
+  const ensureIntelligenceSeedText = async () => {
+    const existingSeed = getIntelligenceSeedText();
+    if (existingSeed) return existingSeed;
+
+    if (selectedType && selectedType !== 'text' && uploadedFile) {
+      const mediaRes = await creationAPI.extractAndGenerate(
+        uploadedFile,
+        selectedType as 'image' | 'audio' | 'video',
+        language
+      );
+      const extracted = (mediaRes.extracted_content || '').trim();
+      if (extracted) {
+        setExtractedContent(extracted);
+        setWorkflowSteps((prev) => (prev.includes('Media analyzed') ? prev : [...prev, 'Media analyzed']));
+        return extracted;
+      }
+    }
+
+    return '';
+  };
+
   const handleRunIntelligencePack = async () => {
-    const seedText = getIntelligenceSeedText();
+    const seedText = await ensureIntelligenceSeedText();
     if (!seedText) return;
 
     setIsRunningIntelligence(true);
@@ -524,7 +650,7 @@ export default function Studio() {
 
     try {
       const platform = resolvePlatformForIntelligence();
-      const [culture, risk, cancel, assets, mental, shadow] = await Promise.all([
+      const checks = await Promise.allSettled([
         intelligenceAPI.cultureRewrite(
           seedText,
           intelRegion.trim() || 'general',
@@ -543,15 +669,36 @@ export default function Studio() {
         intelligenceAPI.mentalHealthAnalyze([seedText]),
         intelligenceAPI.predictShadowban(seedText, generatedContent?.hashtags, platform),
       ]);
+      const [cultureCheck, riskCheck, cancelCheck, assetsCheck, mentalCheck, shadowCheck] = checks;
 
-      setIntelligenceResult({
-        culture,
-        risk,
-        cancel,
-        assets,
-        mental,
-        shadow,
-      });
+      const partialResult: IntelligencePackResult = {
+        culture: cultureCheck.status === 'fulfilled' ? cultureCheck.value : undefined,
+        risk: riskCheck.status === 'fulfilled' ? riskCheck.value : undefined,
+        cancel: cancelCheck.status === 'fulfilled' ? cancelCheck.value : undefined,
+        assets: assetsCheck.status === 'fulfilled' ? assetsCheck.value : undefined,
+        mental: mentalCheck.status === 'fulfilled' ? mentalCheck.value : undefined,
+        shadow: shadowCheck.status === 'fulfilled' ? shadowCheck.value : undefined,
+      };
+
+      const succeededCount = Object.values(partialResult).filter(Boolean).length;
+      const failedChecks = [
+        cultureCheck.status === 'rejected' ? 'Culture' : null,
+        riskCheck.status === 'rejected' ? 'Risk/Reach' : null,
+        cancelCheck.status === 'rejected' ? 'Anti-Cancel' : null,
+        assetsCheck.status === 'rejected' ? 'Asset Explosion' : null,
+        mentalCheck.status === 'rejected' ? 'Mental Health' : null,
+        shadowCheck.status === 'rejected' ? 'Shadowban' : null,
+      ].filter((item): item is string => Boolean(item));
+
+      if (succeededCount === 0) {
+        setError('All intelligence checks failed. Please try again.');
+        return;
+      }
+
+      setIntelligenceResult(partialResult);
+      if (failedChecks.length > 0) {
+        setError(`Some intelligence checks failed: ${failedChecks.join(', ')}.`);
+      }
     } catch (err) {
       if (err instanceof APIError) {
         setError(err.message);
@@ -576,11 +723,14 @@ export default function Studio() {
       const res = await motionAPI.generateImage(prompt, imageEngine, 1024, 1024);
       setGeneratedImage({
         image_url: res.image_url,
+        preview_url: res.preview_url,
         engine: res.engine,
         model_id: res.model_id,
         provider: res.provider,
         prompt: res.prompt,
       });
+      setGeneratedImagePreviewFailed(false);
+      setSuccessMessage('Image generated successfully.');
       setWorkflowSteps((prev) => (prev.includes('Image generated') ? prev : [...prev, 'Image generated']));
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
@@ -601,7 +751,9 @@ export default function Studio() {
         file_path: generatedImage.image_url,
       });
       setSavedContentId(item.id);
+      setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
       await loadSavedAssets();
+      setSuccessMessage('Generated image saved to My Content.');
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
       else setError('Failed to save generated image.');
@@ -621,7 +773,9 @@ export default function Studio() {
         file_path: mediaConvertJob.output,
       });
       setSavedContentId(item.id);
+      setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
       await loadSavedAssets();
+      setSuccessMessage('MediaConvert output saved to My Content.');
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
       else setError('Failed to save MediaConvert output.');
@@ -641,7 +795,9 @@ export default function Studio() {
         file_path: novaReelJob.output,
       });
       setSavedContentId(item.id);
+      setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
       await loadSavedAssets();
+      setSuccessMessage('Nova Reel output saved to My Content.');
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
       else setError('Failed to save Nova Reel output.');
@@ -675,7 +831,12 @@ export default function Studio() {
     setVideoActionLoading('mediaconvert-status');
     try {
       const res = await motionAPI.getMediaConvertStatus(mediaConvertJob.id);
-      setMediaConvertJob((prev) => prev ? { ...prev, status: res.status, output: prev.output || res.output_s3_uri } : prev);
+      const resolvedOutput = extractMediaConvertOutputUri(res.output_group_details) || res.output_s3_uri;
+      setMediaConvertJob((prev) => {
+        if (!prev) return prev;
+        const nextOutput = isConcreteMediaUri(resolvedOutput) ? resolvedOutput : (prev.output || resolvedOutput);
+        return { ...prev, status: res.status, output: nextOutput };
+      });
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
       else setError('Failed to fetch MediaConvert status.');
@@ -717,7 +878,11 @@ export default function Studio() {
     setVideoActionLoading('nova-reel-status');
     try {
       const res = await motionAPI.getNovaReelStatus(novaReelJob.arn);
-      setNovaReelJob((prev) => prev ? { ...prev, status: res.status, output: prev.output || res.output_s3_uri } : prev);
+      setNovaReelJob((prev) => {
+        if (!prev) return prev;
+        const nextOutput = isConcreteMediaUri(res.output_s3_uri) ? res.output_s3_uri : (prev.output || res.output_s3_uri);
+        return { ...prev, status: res.status, output: nextOutput };
+      });
     } catch (err) {
       if (err instanceof APIError) setError(err.message);
       else setError('Failed to fetch Nova Reel status.');
@@ -750,6 +915,11 @@ export default function Studio() {
             </div>
           </CardHeader>
           <CardContent>
+            {savedAssetsError && (
+              <div className="mb-3 p-3 rounded-lg border border-destructive/20 bg-destructive/10 text-destructive text-sm">
+                {savedAssetsError}
+              </div>
+            )}
             {savedAssets.length === 0 ? (
               <p className="text-sm text-muted-foreground">No saved assets yet. Save one from Creator Studio to see it here.</p>
             ) : (
@@ -765,13 +935,13 @@ export default function Studio() {
                     {!asset.caption && !asset.summary && asset.original_text && <p className="text-sm line-clamp-3">{asset.original_text}</p>}
 
                     {asset.file_path && asset.content_type === 'image' && (
-                      <img src={asset.file_path} alt="Saved asset" className="w-full rounded border border-border" />
+                      <img src={asset.file_url || asset.file_path} alt="Saved asset" className="w-full rounded border border-border" />
                     )}
                     {asset.file_path && asset.content_type === 'video' && (
-                      <video src={asset.file_path} controls className="w-full rounded border border-border" />
+                      <video src={asset.file_url || asset.file_path} controls className="w-full rounded border border-border" />
                     )}
                     {asset.file_path && asset.content_type === 'audio' && (
-                      <audio src={asset.file_path} controls className="w-full" />
+                      <audio src={asset.file_url || asset.file_path} controls className="w-full" />
                     )}
                     {asset.file_path && !['image', 'video', 'audio'].includes(asset.content_type) && (
                       <a href={asset.file_path} target="_blank" rel="noreferrer" className="text-xs text-primary underline break-all">
@@ -789,6 +959,11 @@ export default function Studio() {
         {error && (
           <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive">
             <p className="text-sm font-medium">{error}</p>
+          </div>
+        )}
+        {successMessage && (
+          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700">
+            <p className="text-sm font-medium">{successMessage}</p>
           </div>
         )}
 
@@ -899,14 +1074,28 @@ export default function Studio() {
         {selectedType && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Upload {selectedType.charAt(0).toUpperCase() + selectedType.slice(1)}</CardTitle>
+              <CardTitle className="text-lg">Create {selectedType.charAt(0).toUpperCase() + selectedType.slice(1)} Content</CardTitle>
               <CardDescription>
                 {selectedType === 'text' 
-                  ? 'Enter or paste your text content below'
-                  : `Upload your ${selectedType} file and add a description`}
+                  ? 'Step 1: add your source text. Step 2: tune options. Step 3: generate complete package.'
+                  : `Step 1: upload ${selectedType}. Step 2: add optional context. Step 3: generate complete package.`}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="p-3 rounded-lg border bg-muted/20">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className={`px-2 py-1 rounded ${selectedType ? 'bg-emerald-500/15 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>
+                    Content type selected
+                  </span>
+                  <span className={`px-2 py-1 rounded ${canRunCompleteWorkflow ? 'bg-emerald-500/15 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>
+                    Input ready
+                  </span>
+                  <span className={`px-2 py-1 rounded ${generatedContent ? 'bg-emerald-500/15 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>
+                    Package generated
+                  </span>
+                </div>
+              </div>
+
               {selectedType !== 'text' && (
                 <div 
                   className="border-2 border-dashed border-primary/20 rounded-xl p-8 text-center hover:border-primary/40 transition-colors cursor-pointer"
@@ -941,6 +1130,31 @@ export default function Studio() {
                       </Button>
                     </>
                   )}
+                </div>
+              )}
+
+              {uploadedFile && uploadedPreviewUrl && (
+                <div className="space-y-2">
+                  <Label>Uploaded Preview</Label>
+                  <div className="p-3 rounded-lg bg-background border">
+                    {selectedType === 'image' && (
+                      <img
+                        src={uploadedPreviewUrl}
+                        alt={uploadedFile.name}
+                        className="w-full max-w-xl rounded border border-border"
+                      />
+                    )}
+                    {selectedType === 'video' && (
+                      <video
+                        src={uploadedPreviewUrl}
+                        controls
+                        className="w-full max-w-xl rounded border border-border"
+                      />
+                    )}
+                    {selectedType === 'audio' && (
+                      <audio src={uploadedPreviewUrl} controls className="w-full max-w-xl" />
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1134,11 +1348,26 @@ export default function Studio() {
                   </div>
                   {generatedImage && (
                     <div className="p-3 rounded-lg bg-background border space-y-3">
-                      <img
-                        src={generatedImage.image_url}
-                        alt="Generated asset"
-                        className="w-full max-w-xl rounded-lg border border-border"
-                      />
+                      {generatedImagePreviewFailed ? (
+                        <div className="text-sm text-muted-foreground">
+                          Preview unavailable. Open image directly:{' '}
+                          <a
+                            href={generatedImage.image_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary underline break-all"
+                          >
+                            {generatedImage.image_url}
+                          </a>
+                        </div>
+                      ) : (
+                        <img
+                          src={generatedImage.preview_url || generatedImage.image_url}
+                          alt="Generated asset"
+                          className="w-full max-w-xl rounded-lg border border-border"
+                          onError={() => setGeneratedImagePreviewFailed(true)}
+                        />
+                      )}
                       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                         <span className="px-2 py-1 rounded bg-muted">Engine: {generatedImage.engine}</span>
                         <span className="px-2 py-1 rounded bg-muted">Model: {generatedImage.model_id}</span>
@@ -1185,7 +1414,7 @@ export default function Studio() {
                             variant="outline"
                             size="sm"
                             onClick={handleSaveMediaConvertOutput}
-                            disabled={savingToContent}
+                            disabled={savingToContent || !isConcreteMediaUri(mediaConvertJob.output)}
                           >
                             {savingToContent ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
                             Save Video Asset
@@ -1248,7 +1477,7 @@ export default function Studio() {
                             variant="outline"
                             size="sm"
                             onClick={handleSaveNovaReelOutput}
-                            disabled={savingToContent}
+                            disabled={savingToContent || !isConcreteMediaUri(novaReelJob.output)}
                           >
                             {savingToContent ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
                             Save Video Asset
@@ -1260,89 +1489,62 @@ export default function Studio() {
                 </div>
               )}
 
-              <div className="space-y-4 p-4 rounded-lg bg-primary/5 border border-primary/20">
-                <div>
-                  <h4 className="text-sm font-medium">Intelligence Pack (Integrated Hub)</h4>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Run all Intelligence Hub checks in Creator Studio on your current content context.
-                  </p>
+              <div className="space-y-3 p-4 rounded-lg bg-muted/30 border border-border/50">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-medium">Manual Options (Advanced)</h4>
+                    <p className="text-xs text-muted-foreground">
+                      Generate one item at a time instead of the full package.
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowManualActions((prev) => !prev)}
+                    disabled={isProcessing}
+                  >
+                    {showManualActions ? 'Hide' : 'Show'}
+                  </Button>
                 </div>
-                <div className="grid sm:grid-cols-4 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="intel-region">Region</Label>
-                    <input
-                      id="intel-region"
-                      type="text"
-                      value={intelRegion}
-                      onChange={(e) => setIntelRegion(e.target.value)}
-                      placeholder="general / Chennai / Delhi"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    />
+                {showManualActions && (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => handleGenerate('caption')}
+                        disabled={isProcessing || !canRunManualGeneration}
+                      >
+                        {processingType === 'caption' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
+                        Caption
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => handleGenerate('summary')}
+                        disabled={isProcessing || !canRunManualGeneration}
+                      >
+                        {processingType === 'summary' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSignature className="h-4 w-4 mr-2" />}
+                        Summary
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => handleGenerate('hashtags')}
+                        disabled={isProcessing || !canRunManualGeneration}
+                      >
+                        {processingType === 'hashtags' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Hash className="h-4 w-4 mr-2" />}
+                        Hashtags
+                      </Button>
+                    </div>
+                    {!canRunManualGeneration && (
+                      <p className="text-xs text-muted-foreground">
+                        Add text or analyze media first to enable manual options.
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="intel-language">Language</Label>
-                    <input
-                      id="intel-language"
-                      type="text"
-                      value={intelLanguage}
-                      onChange={(e) => setIntelLanguage(e.target.value)}
-                      placeholder="English / Hindi / Tamil"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="intel-festival">Festival</Label>
-                    <input
-                      id="intel-festival"
-                      type="text"
-                      value={intelFestival}
-                      onChange={(e) => setIntelFestival(e.target.value)}
-                      placeholder="Optional"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="intel-niche">Niche</Label>
-                    <input
-                      id="intel-niche"
-                      type="text"
-                      value={intelNiche}
-                      onChange={(e) => setIntelNiche(e.target.value)}
-                      placeholder="Beauty / Finance / Fitness"
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="intel-risk-level">Risk vs Reach Dial: {intelRiskLevel}</Label>
-                  <input
-                    id="intel-risk-level"
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={intelRiskLevel}
-                    onChange={(e) => setIntelRiskLevel(parseInt(e.target.value))}
-                    title="Adjust intelligence risk level"
-                    aria-label="Intelligence risk level slider"
-                    className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer slider"
-                  />
-                </div>
-                <Button
-                  variant="outline"
-                  onClick={handleRunIntelligencePack}
-                  disabled={isRunningIntelligence || !getIntelligenceSeedText()}
-                >
-                  {isRunningIntelligence ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Brain className="h-4 w-4 mr-2" />
-                  )}
-                  Run Full Intelligence Pack
-                </Button>
+                )}
               </div>
 
-              {/* Generation Actions */}
+              <div className="space-y-3 p-4 rounded-lg bg-muted/30 border border-border/50">
+              {/* Primary Generation Action */}
               <div className="flex flex-wrap gap-3 pt-4">
                 <Button
                   variant="hero"
@@ -1360,41 +1562,105 @@ export default function Studio() {
                       ? 'Analyze Upload + Create Complete Package'
                     : `Analyze Upload + Create Complete Package (${presetLabelMap[executionPreset]})`}
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => setShowManualActions((prev) => !prev)}
-                  disabled={isProcessing}
-                >
-                  {showManualActions ? 'Hide manual actions' : 'Show manual actions'}
-                </Button>
+              </div>
+              {!canRunCompleteWorkflow && (
+                <p className="text-xs text-muted-foreground">{completeWorkflowDisabledHint}</p>
+              )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-                {showManualActions && (
-                  <>
-                  <Button
-                    variant="outline"
-                    onClick={() => handleGenerate('caption')}
-                    disabled={isProcessing || !inputText.trim()}
-                  >
-                    {processingType === 'caption' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
-                    Caption
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => handleGenerate('summary')}
-                    disabled={isProcessing || !inputText.trim()}
-                  >
-                  {processingType === 'summary' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSignature className="h-4 w-4 mr-2" />}
-                  Summary
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => handleGenerate('hashtags')}
-                    disabled={isProcessing || !inputText.trim()}
-                  >
-                    {processingType === 'hashtags' ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Hash className="h-4 w-4 mr-2" />}
-                    Hashtags
-                  </Button>
-                  </>
+        {selectedType && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Intelligence Pack</CardTitle>
+              <CardDescription>
+                Run strategic checks after drafting context to improve quality, safety, and reach.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="ui-instruction">
+                Fill region, language, and niche first. Then run the pack for clearer recommendations and fewer failed checks.
+              </p>
+              <div className="grid sm:grid-cols-4 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="intel-region">Region</Label>
+                  <input
+                    id="intel-region"
+                    type="text"
+                    value={intelRegion}
+                    onChange={(e) => setIntelRegion(e.target.value)}
+                    placeholder="general / Chennai / Delhi"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="intel-language">Language</Label>
+                  <input
+                    id="intel-language"
+                    type="text"
+                    value={intelLanguage}
+                    onChange={(e) => setIntelLanguage(e.target.value)}
+                    placeholder="English / Hindi / Tamil"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="intel-festival">Festival</Label>
+                  <input
+                    id="intel-festival"
+                    type="text"
+                    value={intelFestival}
+                    onChange={(e) => setIntelFestival(e.target.value)}
+                    placeholder="Optional"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="intel-niche">Niche</Label>
+                  <input
+                    id="intel-niche"
+                    type="text"
+                    value={intelNiche}
+                    onChange={(e) => setIntelNiche(e.target.value)}
+                    placeholder="Beauty / Finance / Fitness"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="intel-risk-level">Risk vs Reach Dial: {intelRiskLevel}</Label>
+                <input
+                  id="intel-risk-level"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={intelRiskLevel}
+                  onChange={(e) => setIntelRiskLevel(parseInt(e.target.value))}
+                  title="Adjust intelligence risk level"
+                  aria-label="Intelligence risk level slider"
+                  className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer slider"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={handleRunIntelligencePack}
+                  disabled={isRunningIntelligence || !canRunIntelligencePack}
+                >
+                  {isRunningIntelligence ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Brain className="h-4 w-4 mr-2" />
+                  )}
+                  Run Full Intelligence Pack
+                </Button>
+                {!canRunIntelligencePack && (
+                  <p className="text-xs text-muted-foreground">
+                    Create content or add input first to enable intelligence checks.
+                  </p>
                 )}
               </div>
             </CardContent>
@@ -1582,7 +1848,7 @@ export default function Studio() {
 
               <div className="flex flex-wrap gap-3 pt-2">
                 <Button variant="hero" onClick={handleSave}>
-                  Save Content
+                  Start New Draft
                 </Button>
                 <Button
                   variant="outline"

@@ -3,10 +3,11 @@ Novel Hub Router — Future Enhancement Features
 =================================================
 Exposes the 5 novel agentic features as API endpoints.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+from routers.auth import CurrentUser, get_current_user_optional
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/novel", tags=["novel"])
@@ -51,7 +52,10 @@ class BurnoutRequest(BaseModel):
 # ─── Endpoints ─────────────────────────────────────────────────
 
 @router.post("/signal-intelligence")
-async def signal_intelligence(request: SignalIntelRequest):
+async def signal_intelligence(
+    request: SignalIntelRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Multi-Agent Competitor Signal Intelligence."""
     try:
         from services.novel_services import competitor_signal_intelligence
@@ -60,6 +64,7 @@ async def signal_intelligence(request: SignalIntelRequest):
             niche=request.niche,
             region=request.region,
             platforms=request.platforms,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -68,7 +73,10 @@ async def signal_intelligence(request: SignalIntelRequest):
 
 
 @router.post("/trend-injection")
-async def trend_injection(request: TrendInjectionRequest):
+async def trend_injection(
+    request: TrendInjectionRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Hyper-Local Trend Injection via Contextual RAG."""
     try:
         from services.novel_services import hyper_local_trend_injection
@@ -77,6 +85,7 @@ async def trend_injection(request: TrendInjectionRequest):
             region=request.region,
             niche=request.niche,
             inject_trends=request.inject_trends,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -85,7 +94,10 @@ async def trend_injection(request: TrendInjectionRequest):
 
 
 @router.post("/multimodal-production")
-async def multimodal_production(request: MultimodalRequest):
+async def multimodal_production(
+    request: MultimodalRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Omnichannel Multimodal Content Production."""
     try:
         from services.novel_services import multimodal_production as produce
@@ -94,6 +106,7 @@ async def multimodal_production(request: MultimodalRequest):
             formats=request.formats,
             niche=request.niche,
             target_language=request.target_language,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -114,7 +127,10 @@ async def get_production_formats():
 
 
 @router.post("/auto-publish")
-async def auto_publish(request: PlatformAdaptRequest):
+async def auto_publish(
+    request: PlatformAdaptRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Platform Adapter — generates platform-optimized content previews showing how content differs per platform."""
     try:
         from services.novel_services import auto_publish_preview
@@ -123,6 +139,7 @@ async def auto_publish(request: PlatformAdaptRequest):
             platforms=request.platforms,
             niche=request.niche,
             schedule_time=request.schedule_time,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -131,7 +148,10 @@ async def auto_publish(request: PlatformAdaptRequest):
 
 
 @router.post("/burnout-predict")
-async def burnout_predict(request: BurnoutRequest):
+async def burnout_predict(
+    request: BurnoutRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Predictive Creator Burnout & Self-Evolving Workload."""
     try:
         from services.novel_services import predictive_burnout_workload
@@ -139,6 +159,7 @@ async def burnout_predict(request: BurnoutRequest):
             posts=request.posts,
             niche=request.niche,
             weekly_target=request.weekly_target,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:

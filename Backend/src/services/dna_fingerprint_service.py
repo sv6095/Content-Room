@@ -79,7 +79,7 @@ async def _embed_text(text: str) -> List[float]:
 async def analyze_content_dna(
     new_content: str,
     post_history: List[str],
-    user_id: Optional[int] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Fingerprint a creator's content DNA and check if new content drifts.
@@ -127,7 +127,12 @@ Post samples:
 
 Content DNA (3 bullet points only, no headers):"""
 
-    style_result = await llm.generate(style_prompt, task="dna_fingerprint", max_tokens=200)
+    style_result = await llm.generate(
+        style_prompt,
+        task="dna_fingerprint",
+        max_tokens=200,
+        user_id=user_id,
+    )
 
     recommendation = ""
     if drift_detected:
@@ -137,7 +142,12 @@ Their new draft feels off-brand. Rewrite the following to realign with their Con
 {new_content}
 
 Realigned version (same message, correct voice):"""
-        realign_result = await llm.generate(realign_prompt, task="dna_realign", max_tokens=400)
+        realign_result = await llm.generate(
+            realign_prompt,
+            task="dna_realign",
+            max_tokens=400,
+            user_id=user_id,
+        )
         recommendation = realign_result["text"]
 
     return {

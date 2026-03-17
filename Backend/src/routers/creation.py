@@ -117,6 +117,7 @@ async def generate_caption(
             request.content_type,
             max_length=max_length,
             platform=request.platform,
+            language=request.language,
             model=request.model,
             user_id=current_user.id if current_user else None,
         )
@@ -146,6 +147,7 @@ async def generate_summary(
         result = await llm.generate_summary(
             request.content,
             max_length=max_length,
+            language=request.language,
             model=request.model,
             user_id=current_user.id if current_user else None,
         )
@@ -174,6 +176,7 @@ async def generate_hashtags(
         result = await llm.generate_hashtags(
             request.content,
             request.count,
+            language=request.language,
             model=request.model,
             user_id=current_user.id if current_user else None,
         )
@@ -270,6 +273,8 @@ async def extract_and_generate(
     summary_max_length: int = Form(150),
     generate_hashtags: bool = Form(True),
     hashtag_count: int = Form(5),
+    language: Optional[str] = Form("en"),
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
 ):
     """
     Extract content from media files and generate caption/hashtags.
@@ -325,15 +330,15 @@ async def extract_and_generate(
                 extracted_content += f"Audio transcript: {transcript} "
                 providers.append(transcript_result.get("provider", "speech"))
         
-        # Extract from video (use first frame for now)
+        # Extract from video (start async moderation job)
         if video:
             video_bytes = await video.read()
-            video_analysis = await vision.analyze_video(video_bytes)
-            labels = video_analysis.get("content_labels", [])
-            if labels:
-                label_text = ", ".join(labels[:12])
-                extracted_content += f"Video content: {label_text}. "
-                providers.append(video_analysis.get("provider", "vision_video"))
+            video_job = await vision.start_video_moderation(video_bytes, video.filename or "video.mp4")
+            extracted_content += (
+                "Video submitted for moderation analysis. "
+                f"Moderation job id: {video_job.get('job_id')}. "
+            )
+            providers.append(video_job.get("provider", "vision_video_async"))
         
         if not extracted_content:
             raise HTTPException(
@@ -347,7 +352,9 @@ async def extract_and_generate(
             caption_result = await llm.generate_caption(
                 extracted_content,
                 "text",
-                max_length=caption_max_length
+                max_length=caption_max_length,
+                language=language,
+                user_id=current_user.id if current_user else None,
             )
             caption_text = caption_result["text"]
             providers.append(caption_result["provider"])
@@ -357,7 +364,9 @@ async def extract_and_generate(
         if generate_summary:
             summary_result = await llm.generate_summary(
                 extracted_content,
-                max_length=summary_max_length
+                max_length=summary_max_length,
+                language=language,
+                user_id=current_user.id if current_user else None,
             )
             summary_text = summary_result["text"]
             providers.append(summary_result["provider"])
@@ -365,7 +374,12 @@ async def extract_and_generate(
         # Generate hashtags if requested
         hashtags_list = None
         if generate_hashtags:
-            hashtags_result = await llm.generate_hashtags(extracted_content, hashtag_count)
+            hashtags_result = await llm.generate_hashtags(
+                extracted_content,
+                hashtag_count,
+                language=language,
+                user_id=current_user.id if current_user else None,
+            )
             hashtags_list = hashtags_result["hashtags"]
             providers.append(hashtags_result["provider"])
         

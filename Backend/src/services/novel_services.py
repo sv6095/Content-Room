@@ -40,6 +40,7 @@ async def _generate_with_validation(
     prompt: str,
     task: str,
     max_tokens: int,
+    user_id: Optional[str] = None,
     required_markers: Optional[List[str]] = None,
     min_len: int = 40,
 ) -> dict:
@@ -47,7 +48,7 @@ async def _generate_with_validation(
     Generate once, validate output shape, and auto-retry once if malformed.
     Returns llm.generate() result payload.
     """
-    first = await llm.generate(prompt, task=task, max_tokens=max_tokens)
+    first = await llm.generate(prompt, task=task, max_tokens=max_tokens, user_id=user_id)
     text = (first.get("text") or "").strip()
     missing = _missing_required_markers(text, required_markers)
     if text and len(text) >= min_len and not missing:
@@ -59,7 +60,7 @@ async def _generate_with_validation(
         + (f" Include these markers: {', '.join(required_markers)}." if required_markers else "")
         + " Return only the final structured output."
     )
-    second = await llm.generate(retry_prompt, task=task, max_tokens=max_tokens)
+    second = await llm.generate(retry_prompt, task=task, max_tokens=max_tokens, user_id=user_id)
     second_text = (second.get("text") or "").strip()
     second_missing = _missing_required_markers(second_text, required_markers)
     if second_text and len(second_text) >= min_len and not second_missing:
@@ -86,6 +87,7 @@ async def competitor_signal_intelligence(
     niche: str,
     region: str = "pan-india",
     platforms: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Multi-Agent Signal Intelligence Pipeline.
@@ -118,6 +120,7 @@ FORMAT_DISTRIBUTION
         scraper_prompt,
         task="signal_intel_scraper",
         max_tokens=520,
+        user_id=user_id,
         required_markers=[
             "TOP_POST_PATTERNS",
             "HOOK_PATTERNS",
@@ -147,6 +150,7 @@ Use specific, actionable insights with estimated confidence where needed.
         analyst_prompt,
         task="signal_intel_analyst",
         max_tokens=520,
+        user_id=user_id,
         required_markers=[
             "VIRALITY_PATTERNS",
             "CONTENT_GAPS",
@@ -179,6 +183,7 @@ CONTENT_CALENDAR_SUGGESTION (this week)
         strategist_prompt,
         task="signal_intel_strategist",
         max_tokens=560,
+        user_id=user_id,
         required_markers=[
             "TITLE",
             "FORMAT",
@@ -273,6 +278,7 @@ async def hyper_local_trend_injection(
     region: str,
     niche: str,
     inject_trends: bool = True,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     RAG-enhanced content adaptation with hyper-local trend injection.
@@ -317,6 +323,7 @@ Be region-specific, avoid generic filler.
         trend_prompt,
         task="rag_trend_discovery",
         max_tokens=420,
+        user_id=user_id,
         required_markers=["TREND", "WHY", "RELEVANCE", "HOOK", "HASHTAGS"],
     )
 
@@ -343,6 +350,7 @@ CULTURAL_NOTES:
         injection_prompt,
         task="rag_trend_injection",
         max_tokens=520,
+        user_id=user_id,
         required_markers=["ENHANCED_CONTENT", "INJECTED_TRENDS", "LOCAL_HASHTAGS", "CULTURAL_NOTES"],
     )
 
@@ -396,6 +404,7 @@ async def multimodal_production(
     formats: List[str],
     niche: str,
     target_language: str = "Hindi",
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Omnichannel Multimodal Production Agent.
@@ -427,6 +436,7 @@ Return only final document.
                 prompt,
                 task=f"multimodal_{fmt_key}",
                 max_tokens=520,
+                user_id=user_id,
                 required_markers=None,
                 min_len=80,
             )
@@ -502,6 +512,7 @@ async def auto_publish_preview(
     platforms: List[str],
     niche: str,
     schedule_time: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Platform Adapter — generates platform-optimized previews
@@ -538,6 +549,7 @@ No placeholders.
                 prompt,
                 task=f"autopublish_{platform}",
                 max_tokens=420,
+                user_id=user_id,
                 required_markers=[
                     "OPTIMIZED_CONTENT",
                     "HASHTAGS_OR_TAGS",
@@ -659,6 +671,7 @@ async def predictive_burnout_workload(
     posts: List[str],
     niche: str,
     weekly_target: int = 7,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Predictive Creator Burnout & Self-Evolving Workload Agent.
@@ -713,6 +726,7 @@ Rules:
         schedule_prompt,
         task="burnout_schedule",
         max_tokens=560,
+        user_id=user_id,
         required_markers=["TASK", "EFFORT", "FORMAT", "TOPIC", "WELLNESS_TIP", "CREATOR_WELLNESS_SCORE"],
     )
 

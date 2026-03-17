@@ -117,12 +117,30 @@ class ImageGenerationService:
                 preferred_provider="s3",
             )
 
+            image_url = upload.get("url")
+            image_key = upload.get("key")
+            image_provider = upload.get("provider")
+            preview_url = image_url
+
+            # When media is private, direct S3 object URLs can be inaccessible in browser.
+            # Return a time-limited signed URL so Studio preview always renders.
+            if image_provider == "s3" and image_key:
+                try:
+                    preview_url = await storage.get_url(
+                        file_key=image_key,
+                        provider="s3",
+                        expires_in=24 * 60 * 60,
+                    )
+                except Exception as sign_err:
+                    logger.warning(f"Failed to sign generated image URL, falling back to object URL: {sign_err}")
+
             return {
                 "prompt": prompt.strip(),
                 "engine": normalized_engine,
                 "model_id": model_id,
-                "image_url": upload.get("url"),
-                "image_key": upload.get("key"),
+                "image_url": image_url,
+                "preview_url": preview_url,
+                "image_key": image_key,
                 "provider": f"bedrock_{normalized_engine}",
             }
         except Exception as e:

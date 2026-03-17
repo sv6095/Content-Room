@@ -4,8 +4,9 @@ Aggregates all novel AI intelligence features under /api/v1/intel
 """
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from routers.auth import CurrentUser, get_current_user_optional
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,7 +25,10 @@ class CultureRequest(BaseModel):
 
 
 @router.post("/culture/rewrite")
-async def culture_rewrite(request: CultureRequest):
+async def culture_rewrite(
+    request: CultureRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Rewrite content with regional emotional persona. AWS Bedrock + Translate primary."""
     try:
         from services.culture_engine import rewrite_for_region
@@ -34,6 +38,7 @@ async def culture_rewrite(request: CultureRequest):
             request.festival,
             request.content_niche,
             target_language=request.target_language,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -65,7 +70,10 @@ class RiskReachRequest(BaseModel):
 
 
 @router.post("/risk-reach/generate")
-async def risk_reach_generate(request: RiskReachRequest):
+async def risk_reach_generate(
+    request: RiskReachRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Generate content at specified risk level (0=Safe, 100=Viral). AWS Comprehend audits output."""
     try:
         from services.risk_reach_service import generate_risk_reach_content
@@ -74,6 +82,7 @@ async def risk_reach_generate(request: RiskReachRequest):
             request.risk_level,
             request.platform,
             request.niche,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -92,14 +101,18 @@ class DNARequest(BaseModel):
 
 
 @router.post("/dna/analyze")
-async def analyze_dna(request: DNARequest):
+async def analyze_dna(
+    request: DNARequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Fingerprint creator voice & detect brand drift. AWS SageMaker + sentence-transformers fallback."""
     try:
         from services.dna_fingerprint_service import analyze_content_dna
+        resolved_user_id = current_user.id if current_user else request.user_id
         result = await analyze_content_dna(
             request.new_content,
             request.post_history,
-            request.user_id,
+            str(resolved_user_id) if resolved_user_id else None,
         )
         return result
     except Exception as e:
@@ -121,11 +134,18 @@ class HeatmapRequest(BaseModel):
 
 
 @router.post("/anti-cancel/analyze")
-async def anti_cancel_analyze(request: CancelShieldRequest):
+async def anti_cancel_analyze(
+    request: CancelShieldRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Analyze content for controversy/cancel risk. AWS Comprehend + India-specific blacklist."""
     try:
         from services.anti_cancel_service import analyze_cancel_risk
-        result = await analyze_cancel_risk(request.text, request.target_regions)
+        result = await analyze_cancel_risk(
+            request.text,
+            request.target_regions,
+            user_id=current_user.id if current_user else None,
+        )
         return result
     except Exception as e:
         logger.error(f"Anti-cancel error: {e}")
@@ -154,11 +174,15 @@ class MentalHealthRequest(BaseModel):
 
 
 @router.post("/mental-health/analyze")
-async def mental_health_analyze(request: MentalHealthRequest):
+async def mental_health_analyze(
+    request: MentalHealthRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Analyze creator burnout via linguistic entropy + AWS Comprehend batch sentiment."""
     try:
         from services.mental_health_service import analyze_mental_health
-        result = await analyze_mental_health(request.posts, request.user_id)
+        resolved_user_id = current_user.id if current_user else request.user_id
+        result = await analyze_mental_health(request.posts, resolved_user_id)
         return result
     except Exception as e:
         logger.error(f"Mental health analysis error: {e}")
@@ -176,7 +200,10 @@ class AssetExplosionRequest(BaseModel):
 
 
 @router.post("/explode/assets")
-async def explode_assets(request: AssetExplosionRequest):
+async def explode_assets(
+    request: AssetExplosionRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """Generate 12 platform-native assets from one idea. AWS Bedrock parallel generation."""
     try:
         from services.asset_explosion_service import explode_to_12_assets
@@ -184,6 +211,7 @@ async def explode_assets(request: AssetExplosionRequest):
             request.seed_content,
             request.niche,
             request.selected_assets,
+            user_id=current_user.id if current_user else None,
         )
         return result
     except Exception as e:
@@ -219,7 +247,10 @@ RISKY_SUFFIXES = [
 
 
 @router.post("/shadowban/predict")
-async def predict_shadowban(request: ShadowbanRequest):
+async def predict_shadowban(
+    request: ShadowbanRequest,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional),
+):
     """
     Predict shadowban probability using:
     1. Rule-engine pre-filter (fast keyword/pattern matching)
@@ -284,7 +315,12 @@ ANALYSIS: [2-3 sentence explanation]"""
 
         from services.llm_service import get_llm_service
         llm = get_llm_service()
-        llm_result = await llm.generate(llm_prompt, task="shadowban_predict", max_tokens=260)
+        llm_result = await llm.generate(
+            llm_prompt,
+            task="shadowban_predict",
+            max_tokens=260,
+            user_id=current_user.id if current_user else None,
+        )
         llm_text = llm_result["text"]
         provider = llm_result["provider"]
 

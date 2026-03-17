@@ -15,6 +15,7 @@ Also handles TRANSLITERATED text (Indian languages in English script).
 import logging
 from typing import Optional, Dict, Any, List
 from enum import Enum
+import re
 
 from config import settings
 
@@ -76,6 +77,12 @@ class TranslationService:
         "gu": ["hu", "tame", "kem", "chhe", "saru", "karvu", "aavo", "javu", 
                "ahiya", "tyaan", "ghanu"],
     }
+
+    @staticmethod
+    def _normalized_tokens(text: str) -> List[str]:
+        """Tokenize transliterated text robustly (handles punctuation/suffix noise)."""
+        # Keep alpha tokens only so words like "pongal-in," become ["pongal", "in"].
+        return re.findall(r"[a-z]+", (text or "").lower())
     
     def __init__(self):
         self.aws_client = None
@@ -108,12 +115,19 @@ class TranslationService:
         Returns:
             ISO 639-1 language code
         """
-        text_lower = text.lower()
-        words = text_lower.split()
+        words = self._normalized_tokens(text)
         
         # First, check for transliterated Indian language words
         for lang_code, hints in self.TRANSLITERATION_HINTS.items():
-            matches = sum(1 for word in words if word in hints)
+            hint_roots = {h.lower() for h in hints}
+            matches = 0
+            for word in words:
+                if word in hint_roots:
+                    matches += 1
+                    continue
+                # Accept light suffixing/noise (e.g., "irukkuin", "naanum").
+                if any(word.startswith(root) and len(root) >= 4 for root in hint_roots):
+                    matches += 1
             if matches >= 2:  # At least 2 matching words
                 logger.info(f"Detected transliterated {lang_code} (matched {matches} words)")
                 return lang_code
@@ -127,11 +141,17 @@ class TranslationService:
         Returns:
             Language code if transliterated, None otherwise
         """
-        text_lower = text.lower()
-        words = text_lower.split()
+        words = self._normalized_tokens(text)
         
         for lang_code, hints in self.TRANSLITERATION_HINTS.items():
-            matches = sum(1 for word in words if word in hints)
+            hint_roots = {h.lower() for h in hints}
+            matches = 0
+            for word in words:
+                if word in hint_roots:
+                    matches += 1
+                    continue
+                if any(word.startswith(root) and len(root) >= 4 for root in hint_roots):
+                    matches += 1
             if matches >= 2:
                 return lang_code
         return None
