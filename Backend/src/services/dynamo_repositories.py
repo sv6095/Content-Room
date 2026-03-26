@@ -397,10 +397,29 @@ class AICacheRepository:
     def _hash(self, prompt: str, model: str) -> str:
         return hashlib.sha256(f"{model}|{prompt}".encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _is_expired(item: Dict[str, Any]) -> bool:
+        ttl_value = item.get("ttl")
+        if ttl_value is None:
+            return False
+        try:
+            return int(ttl_value) <= int(time.time())
+        except Exception:
+            return False
+
     def get(self, prompt: str, model: str) -> Optional[Dict[str, Any]]:
         key = self._hash(prompt, model)
         res = self.table.get_item(Key={self.key_name: key})
-        return res.get("Item")
+        item = res.get("Item")
+        if not item:
+            return None
+        if self._is_expired(item):
+            try:
+                self.table.delete_item(Key={self.key_name: key})
+            except Exception:
+                logger.warning("Failed deleting expired AI cache entry for key=%s", key)
+            return None
+        return item
 
     def put(self, prompt: str, model: str, response: str, ttl_days: int = 7) -> Dict[str, Any]:
         key = self._hash(prompt, model)
@@ -425,9 +444,28 @@ class ModerationCacheRepository:
     def hash_content(self, value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _is_expired(item: Dict[str, Any]) -> bool:
+        ttl_value = item.get("ttl")
+        if ttl_value is None:
+            return False
+        try:
+            return int(ttl_value) <= int(time.time())
+        except Exception:
+            return False
+
     def get(self, content_hash: str) -> Optional[Dict[str, Any]]:
         res = self.table.get_item(Key={self.key_name: content_hash})
-        return res.get("Item")
+        item = res.get("Item")
+        if not item:
+            return None
+        if self._is_expired(item):
+            try:
+                self.table.delete_item(Key={self.key_name: content_hash})
+            except Exception:
+                logger.warning("Failed deleting expired moderation cache entry for key=%s", content_hash)
+            return None
+        return item
 
     def put(self, content_hash: str, payload: Dict[str, Any], ttl_days: int = 2) -> Dict[str, Any]:
         item = {

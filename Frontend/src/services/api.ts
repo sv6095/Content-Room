@@ -12,6 +12,104 @@ if (!API_BASE_URL) {
 const API_V1 = `${API_BASE_URL}/api/v1`;
 
 // ============================================
+// Retry & Error Handling Utilities
+// ============================================
+
+/**
+ * Log and optionally report errors to backend monitoring.
+ * Helps developers understand why media isn't loading in production.
+ */
+export function reportMediaError(
+  assetId: string,
+  errorType: 'load-failure' | 'url-expired' | 'cors' | 'codec' | 'unknown',
+  details: {
+    contentType?: string;
+    mediaUrl?: string;
+    errorMessage?: string;
+    userAgent?: string;
+  }
+) {
+  const report = {
+    timestamp: new Date().toISOString(),
+    assetId,
+    errorType,
+    url: window.location.href,
+    ...details,
+  };
+  
+  // Always log to console for debugging
+  console.error('[Media Error Report]', report);
+  
+  // Optionally send to backend for monitoring (not implemented yet, would need endpoint)
+  // This is a hook for future backend integration
+  try {
+    // Save last error to localStorage for debugging
+    const recentErrors = JSON.parse(localStorage.getItem('__media_errors') || '[]');
+    recentErrors.push(report);
+    if (recentErrors.length > 10) recentErrors.shift(); // Keep only last 10
+    localStorage.setItem('__media_errors', JSON.stringify(recentErrors));
+  } catch {
+    // Silently fail if localStorage is full or unavailable
+  }
+}
+
+/**
+ * Retry failed fetch requests with exponential backoff.
+ * Useful for handling transient network failures and presigned URL timeouts.
+ */
+export async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  maxRetries: number = 2,
+  initialDelayMs: number = 500
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // Retry on 5xx errors or temporarily unavailable (429, 503)
+      if (!response.ok && ![401, 403, 404].includes(response.status)) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return response;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      if (attempt < maxRetries) {
+        const delayMs = initialDelayMs * Math.pow(2, attempt);
+        console.debug(`[Retry] Attempt ${attempt + 1} failed (${lastError.message}), retrying in ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  
+  throw lastError || new Error(`Failed after ${maxRetries} retries`);
+}
+
+/**
+ * Check if a presigned URL is likely expired by attempting a HEAD request.
+ * Helps distinguish URL expiry from network/CORS issues.
+ */
+export async function isPresignedUrlExpired(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: 'HEAD', mode: 'cors' });
+    // 403 Forbidden often means the presigned URL expired
+    if (response.status === 403) {
+      console.debug(`[URL] Presigned URL returned 403 (likely expired): ${url.substring(0, 80)}...`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    // Network error - can't determine expiry
+    console.debug(`[URL] Could not check presigned URL validity:`, error);
+    return false;
+  }
+}
+
+// ============================================
 // Types & Interfaces
 // ============================================
 
@@ -77,6 +175,22 @@ export interface CalendarRequest {
 
 export interface CalendarResponse {
   calendar_markdown: string;
+}
+
+export interface CachedCalendarItem {
+  content_id: string;
+  month?: string | null;
+  year?: number | null;
+  niche?: string | null;
+  goals?: string | null;
+  content_formats: string[];
+  posts_per_month?: number | null;
+  calendar_markdown: string;
+  created_at: string;
+}
+
+export interface CachedCalendarListResponse {
+  items: CachedCalendarItem[];
 }
 
 export interface TokenResponse {
@@ -165,6 +279,7 @@ export interface ImageGenerationResponse {
   image_url: string;
   preview_url?: string;
   image_key?: string;
+  image_s3_uri?: string;
   provider: string;
 }
 
@@ -669,26 +784,65 @@ export const moderationAPI = {
 export const contentAPI = {
   async list(statusFilter?: string): Promise<ContentItem[]> {
     const params = statusFilter ? `?status_filter=${statusFilter}` : '';
-    const response = await fetch(`${API_V1}/content${params}`, {
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<ContentItem[]>(response);
+    const url = `${API_V1}/content${params}`;
+    console.debug(`[API] Fetching content list from: ${url}`);
+    try {
+      const response = await fetchWithRetry(url, {
+        headers: getAuthHeaders(),
+      }, 2);
+      const data = await handleResponse<ContentItem[]>(response);
+      console.debug(`[API] Loaded ${data.length} content items`, data.map(d => ({
+        id: d.id,
+        type: d.content_type,
+        hasFileUrl: !!d.file_url,
+        hasFilePath: !!d.file_path,
+        filePathIsS3: d.file_path?.startsWith('s3://'),
+      })));
+      return data;
+    } catch (error) {
+      console.error(`[API] Failed to load content list after retries:`, error);
+      throw error;
+    }
   },
 
   async get(id: number | string): Promise<ContentItem> {
-    const response = await fetch(`${API_V1}/content/${id}`, {
-      headers: getAuthHeaders(),
-    });
-    return handleResponse<ContentItem>(response);
+    const url = `${API_V1}/content/${id}`;
+    console.debug(`[API] Fetching content from: ${url}`);
+    try {
+      const response = await fetchWithRetry(url, {
+        headers: getAuthHeaders(),
+      }, 2);
+      const data = await handleResponse<ContentItem>(response);
+      console.debug(`[API] Loaded content`, {
+        id: data.id,
+        type: data.content_type,
+        hasFileUrl: !!data.file_url,
+        hasFilePath: !!data.file_path,
+        filePathIsS3: data.file_path?.startsWith('s3://'),
+      });
+      return data;
+    } catch (error) {
+      console.error(`[API] Failed to load content:`, error);
+      throw error;
+    }
   },
 
   async create(data: ContentCreate): Promise<ContentItem> {
-    const response = await fetch(`${API_V1}/content/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify(data),
-    });
-    return handleResponse<ContentItem>(response);
+    const url = `${API_V1}/content/`;
+    console.debug(`[API] Creating content at: ${url}`);
+    try {
+      const response = await fetchWithRetry(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(data),
+      }, 2);
+      const result = await handleResponse<ContentItem>(response);
+      console.debug(`[API] Content created with ID: ${result.id}`);
+      return result;
+    } catch (error) {
+      console.error(`[API] Failed to create content:`, error);
+      throw error;
+    }
   },
 };
 
@@ -783,6 +937,7 @@ export const schedulerAPI = {
 
     const response = await fetch(`${API_V1}/schedule/with-media`, {
       method: 'POST',
+      headers: { ...getAuthHeaders() },
       body: formData,
     });
     return handleResponse(response);
@@ -982,7 +1137,7 @@ export const historyAPI = {
 
 export async function checkBackendHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${API_V1}/health`);
+    const response = await fetch(`${API_BASE_URL}/health`);
     return response.ok;
   } catch {
     return false;
@@ -1017,6 +1172,24 @@ export const calendarAPI = {
     });
     return handleResponse<CalendarResponse>(response);
   },
+
+  async getCached(filters?: {
+    month?: string;
+    year?: number;
+    niche?: string;
+    limit?: number;
+  }): Promise<CachedCalendarListResponse> {
+    const params = new URLSearchParams();
+    if (filters?.month) params.set('month', filters.month);
+    if (typeof filters?.year === 'number') params.set('year', String(filters.year));
+    if (filters?.niche) params.set('niche', filters.niche);
+    if (typeof filters?.limit === 'number') params.set('limit', String(filters.limit));
+    const query = params.toString();
+    const response = await fetch(`${API_V1}/calendar/cached${query ? `?${query}` : ''}`, {
+      headers: { ...getAuthHeaders() },
+    });
+    return handleResponse<CachedCalendarListResponse>(response);
+  },
 };
 
 // ============================================
@@ -1029,6 +1202,9 @@ export interface CultureRewriteResponse {
   region: string;
   persona_applied: string;
   festival?: string;
+  /** Resolved output language (especially when UI used Auto / region default). */
+  output_language?: string;
+  output_language_code?: string;
   // RL + LLM hybrid scores
   alignment_score?: number;
   llm_score?: number;
@@ -1278,6 +1454,37 @@ export interface PreFlightResponse {
   summary: PreFlightSummary;
 }
 
+interface PipelineStartResponse {
+  analysis_id: string;
+  execution_arn?: string | null;
+  status: string;
+  orchestrator: string;
+}
+
+interface PipelineStatusResponse {
+  analysis_id: string;
+  status: string;
+  execution_arn?: string | null;
+}
+
+interface PipelineStoredResult {
+  analysis_id: string;
+  status?: string;
+  result?: PreFlightResponse;
+  error?: string;
+}
+
+function isPreFlightResponse(value: unknown): value is PreFlightResponse {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  const summary = candidate.summary;
+  return typeof summary === 'object' && summary !== null;
+}
+
+const PIPELINE_TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'TIMED_OUT', 'ABORTED']);
+const PIPELINE_POLL_INTERVAL_MS = 1000;
+const PIPELINE_POLL_TIMEOUT_MS = 45000;
+
 export const pipelineAPI = {
   async analyze(request: PreFlightRequest): Promise<PreFlightResponse> {
     const response = await fetch(`${API_V1}/pipeline/analyze`, {
@@ -1285,7 +1492,48 @@ export const pipelineAPI = {
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(request),
     });
-    return handleResponse<PreFlightResponse>(response);
+    const payload = await handleResponse<PreFlightResponse | PipelineStartResponse>(response);
+
+    // Backward/forward compatibility: some backends return report immediately.
+    if (isPreFlightResponse(payload)) {
+      return payload;
+    }
+
+    const analysisId = payload.analysis_id;
+    const startTs = Date.now();
+
+    // Poll status when pipeline is asynchronous (e.g., Step Functions).
+    let status = payload.status;
+    while (!PIPELINE_TERMINAL_STATUSES.has(status)) {
+      if (Date.now() - startTs > PIPELINE_POLL_TIMEOUT_MS) {
+        throw new APIError('Pre-flight analysis timed out. Please try again.', 504, { analysis_id: analysisId, status });
+      }
+      await new Promise((resolve) => setTimeout(resolve, PIPELINE_POLL_INTERVAL_MS));
+
+      const statusRes = await fetch(`${API_V1}/pipeline/status/${analysisId}`, {
+        headers: getAuthHeaders(),
+      });
+      const statusPayload = await handleResponse<PipelineStatusResponse>(statusRes);
+      status = statusPayload.status;
+    }
+
+    if (status !== 'SUCCEEDED') {
+      throw new APIError(`Pre-flight analysis ${status.toLowerCase()}. Please try again.`, 500, { analysis_id: analysisId, status });
+    }
+
+    const resultRes = await fetch(`${API_V1}/pipeline/result/${analysisId}`, {
+      headers: getAuthHeaders(),
+    });
+    const resultPayload = await handleResponse<PipelineStoredResult | PreFlightResponse>(resultRes);
+
+    if (isPreFlightResponse(resultPayload)) {
+      return resultPayload;
+    }
+    if (isPreFlightResponse(resultPayload.result)) {
+      return resultPayload.result;
+    }
+
+    throw new APIError('Pre-flight analysis returned an unexpected response format.', 500, resultPayload);
   },
 
   async getSupportedLanguages(): Promise<{ languages: string[] }> {

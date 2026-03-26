@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     llm_cost_per_1k_output_tokens_bedrock: float = Field(default=0.0032, alias="LLM_COST_PER_1K_OUTPUT_TOKENS_BEDROCK")
     llm_cost_per_1k_input_tokens_groq: float = Field(default=0.0006, alias="LLM_COST_PER_1K_INPUT_TOKENS_GROQ")
     llm_cost_per_1k_output_tokens_groq: float = Field(default=0.0018, alias="LLM_COST_PER_1K_OUTPUT_TOKENS_GROQ")
+    llm_cache_enabled: bool = Field(default=True, alias="LLM_CACHE_ENABLED")
+    llm_cache_ttl_days: int = Field(default=7, alias="LLM_CACHE_TTL_DAYS")
+    llm_cache_user_scoped: bool = Field(default=True, alias="LLM_CACHE_USER_SCOPED")
 
     # ===========================================
     # Storage (S3 → Firebase → Local)
@@ -189,7 +192,7 @@ class Settings(BaseSettings):
     # ===========================================
     debug: bool = Field(default=True, alias="DEBUG")
     cors_origins: str = Field(
-        default="https://example.com",
+        default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
         alias="CORS_ORIGINS"
     )
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -201,7 +204,11 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         """Parse CORS origins from comma-separated string."""
-        return [origin.strip() for origin in self.cors_origins.split(",")]
+        return [
+            origin.strip()
+            for origin in self.cors_origins.split(",")
+            if origin and origin.strip()
+        ]
     
     @property
     def aws_configured(self) -> bool:

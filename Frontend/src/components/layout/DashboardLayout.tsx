@@ -32,6 +32,10 @@ interface DashboardLayoutProps {
   children: ReactNode;
 }
 
+const TOUR_STORAGE_KEY_BASE = 'content-room-tour-state-v1';
+const ONBOARDING_SEEN_KEY_BASE = 'content-room-onboarding-seen-v1';
+const TOUR_SEEN_KEY_BASE = 'content-room-tour-seen-v1';
+
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -43,6 +47,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const [quickHelpOpen, setQuickHelpOpen] = useState(false);
   const [tourActive, setTourActive] = useState(false);
   const [tourStepIndex, setTourStepIndex] = useState(0);
+  const userStorageSuffix = user?.id || user?.email || 'anonymous';
+  const tourStorageKey = `${TOUR_STORAGE_KEY_BASE}:${userStorageSuffix}`;
+  const onboardingSeenKey = `${ONBOARDING_SEEN_KEY_BASE}:${userStorageSuffix}`;
+  const tourSeenKey = `${TOUR_SEEN_KEY_BASE}:${userStorageSuffix}`;
 
   const sidebarItems = [
     { icon: Wand2, label: t('nav.creatorStudio', 'Creator Studio'), path: '/studio' },
@@ -183,15 +191,30 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const currentGuide = guides[location.pathname as keyof typeof guides];
 
   useEffect(() => {
+    const raw = localStorage.getItem(tourStorageKey);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as { active?: boolean; stepIndex?: number };
+      if (!parsed.active) return;
+      const restoredIndex = Number.isFinite(parsed.stepIndex) ? Number(parsed.stepIndex) : 0;
+      const boundedIndex = Math.min(Math.max(0, restoredIndex), tourSteps.length - 1);
+      setTourStepIndex(boundedIndex);
+      setTourActive(true);
+    } catch {
+      localStorage.removeItem(tourStorageKey);
+    }
+  }, [tourSteps.length, tourStorageKey]);
+
+  useEffect(() => {
     setHideQuickStart(false);
   }, [location.pathname]);
 
   useEffect(() => {
-    const hasSeenOnboarding = localStorage.getItem('content-room-onboarding-seen-v1') === 'true';
+    const hasSeenOnboarding = localStorage.getItem(onboardingSeenKey) === 'true';
     if (!hasSeenOnboarding) {
       setOnboardingOpen(true);
     }
-  }, []);
+  }, [onboardingSeenKey]);
 
   useEffect(() => {
     const shouldOpenHelp = localStorage.getItem('content-room-open-quick-help-once') === 'true';
@@ -208,8 +231,22 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     }
   }, [tourActive, tourStepIndex, currentTourStep, location.pathname, navigate]);
 
+  useEffect(() => {
+    if (!tourActive) {
+      localStorage.removeItem(tourStorageKey);
+      return;
+    }
+    localStorage.setItem(
+      tourStorageKey,
+      JSON.stringify({
+        active: true,
+        stepIndex: tourStepIndex,
+      })
+    );
+  }, [tourActive, tourStepIndex, tourStorageKey]);
+
   const closeOnboarding = () => {
-    localStorage.setItem('content-room-onboarding-seen-v1', 'true');
+    localStorage.setItem(onboardingSeenKey, 'true');
     setOnboardingOpen(false);
   };
 
@@ -227,7 +264,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const handleSkipTour = () => {
     setTourActive(false);
-    localStorage.setItem('content-room-tour-seen-v1', 'true');
+    localStorage.removeItem(tourStorageKey);
+    localStorage.setItem(tourSeenKey, 'true');
   };
 
   const handleNextTour = () => {

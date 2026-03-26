@@ -2,10 +2,12 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Any
+import logging
 from routers.auth import CurrentUser, get_current_user_optional
 from services.competitor_service import CompetitorService
 from services.dynamo_repositories import get_content_repo
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Competitor"])
 
 class CompetitorRequest(BaseModel):

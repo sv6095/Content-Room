@@ -9,6 +9,7 @@ AWS Bedrock-first with automatic fallback chain:
 Each provider is tried in order until one succeeds.
 """
 import logging
+import json
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List
 from enum import Enum
@@ -17,7 +18,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import settings
-from services.dynamo_repositories import get_users_repo, get_analysis_repo
+from services.dynamo_repositories import get_users_repo, get_analysis_repo, get_ai_cache_repo
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,8 @@ class GrokProvider(BaseLLMProvider):
         
         try:
             selected_model = model or kwargs.get("grok_model") or settings.groq_model
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            # trust_env=False avoids broken proxy/env settings causing "failed to fetch".
+            async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers={
@@ -311,6 +313,116 @@ class LLMService:
             out_rate = settings.llm_cost_per_1k_output_tokens_groq
         return (input_tokens / 1000.0) * in_rate + (output_tokens / 1000.0) * out_rate
 
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(k): LLMService._json_safe(v) for k, v in sorted(value.items(), key=lambda i: str(i[0]))}
+        if isinstance(value, (list, tuple)):
+            return [LLMService._json_safe(v) for v in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    def _cache_enabled_for_request(self, task: str, kwargs: Dict[str, Any]) -> bool:
+        if not settings.llm_cache_enabled:
+            return False
+        if kwargs.get("cache", True) is False:
+            return False
+        # Skip caching for explicitly streaming-like tasks if introduced later.
+        if task in {"streaming"}:
+            return False
+        return True
+
+    def _build_cache_prompt(
+        self,
+        *,
+        prompt: str,
+        task: str,
+        kwargs: Dict[str, Any],
+    ) -> str:
+        user_scope = None
+        if settings.llm_cache_user_scoped:
+            user_id = kwargs.get("user_id")
+            user_scope = str(user_id) if user_id else "anonymous"
+        cache_input = {
+            "task": task,
+            "prompt": prompt,
+            "user_scope": user_scope,
+            "params": self._json_safe(
+                {
+                    k: v
+                    for k, v in kwargs.items()
+                    if k
+                    not in {
+                        "user_id",
+                        "cache",
+                        "cache_ttl_days",
+                    }
+                }
+            ),
+        }
+        return json.dumps(cache_input, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+    def _read_cache(
+        self,
+        *,
+        prompt: str,
+        task: str,
+        kwargs: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not self._cache_enabled_for_request(task, kwargs):
+            return None
+        try:
+            cache_prompt = self._build_cache_prompt(prompt=prompt, task=task, kwargs=kwargs)
+            cached_item = get_ai_cache_repo().get(cache_prompt, task)
+            if not cached_item:
+                return None
+            raw_response = cached_item.get("response")
+            if not raw_response:
+                return None
+            parsed = json.loads(raw_response)
+            text = parsed.get("text")
+            if not text:
+                return None
+            return {
+                "text": text,
+                "provider": parsed.get("provider", "cache"),
+                "model": parsed.get("model"),
+                "fallback_used": bool(parsed.get("fallback_used", False)),
+                "cached": True,
+            }
+        except Exception as exc:
+            logger.warning("LLM cache read failed for task '%s': %s", task, exc)
+            return None
+
+    def _write_cache(
+        self,
+        *,
+        prompt: str,
+        task: str,
+        kwargs: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> None:
+        if not self._cache_enabled_for_request(task, kwargs):
+            return
+        try:
+            cache_prompt = self._build_cache_prompt(prompt=prompt, task=task, kwargs=kwargs)
+            ttl_days = int(kwargs.get("cache_ttl_days") or settings.llm_cache_ttl_days)
+            cache_payload = {
+                "text": result.get("text"),
+                "provider": result.get("provider"),
+                "model": result.get("model"),
+                "fallback_used": bool(result.get("fallback_used", False)),
+            }
+            get_ai_cache_repo().put(
+                cache_prompt,
+                task,
+                json.dumps(cache_payload, ensure_ascii=False),
+                ttl_days=max(1, ttl_days),
+            )
+        except Exception as exc:
+            logger.warning("LLM cache write failed for task '%s': %s", task, exc)
+
     def _enforce_budgets(self, user_id: Optional[str]) -> None:
         global_usage = get_analysis_repo().get_global_llm_usage()
         if float(global_usage.get("llm_total_cost_usd", 0.0)) >= float(settings.llm_global_budget_usd):
@@ -373,6 +485,11 @@ class LLMService:
         fallback_used = False
         user_id = kwargs.get("user_id")
 
+        cached = self._read_cache(prompt=prompt, task=task, kwargs=kwargs)
+        if cached:
+            logger.info("LLM cache hit for task '%s'", task)
+            return cached
+
         # Budget guard before executing provider calls.
         self._enforce_budgets(str(user_id) if user_id else None)
         
@@ -399,13 +516,15 @@ class LLMService:
                     input_tokens=input_tokens_est,
                     output_tokens=output_tokens_est,
                 )
-                
-                return {
+
+                result = {
                     "text": text,
                     "provider": name,
                     "model": provider_kwargs.get("model"),
                     "fallback_used": fallback_used,
                 }
+                self._write_cache(prompt=prompt, task=task, kwargs=kwargs, result=result)
+                return result
                 
             except ProviderUnavailableError as e:
                 errors.append(f"{name}: {e}")

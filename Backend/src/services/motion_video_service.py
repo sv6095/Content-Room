@@ -9,6 +9,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from config import settings
 
@@ -69,6 +70,42 @@ class MotionVideoService:
         bucket = no_scheme[:slash_idx]
         key = no_scheme[slash_idx + 1 :]
         return bucket, key
+
+    @staticmethod
+    def _canonicalize_s3_uri(value: Optional[str]) -> Optional[str]:
+        if not value or not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if not raw:
+            return raw
+        if raw.startswith("s3://"):
+            return raw
+        if not raw.startswith("http"):
+            return raw
+
+        try:
+            parsed = urlparse(raw)
+            host = (parsed.netloc or "").strip().lower()
+            path = (parsed.path or "").lstrip("/")
+            if not host or not path:
+                return raw
+
+            # Virtual-hosted-style:
+            # https://bucket.s3.<region>.amazonaws.com/key
+            if ".s3." in host:
+                bucket = host.split(".s3.", 1)[0]
+                return f"s3://{bucket}/{path}" if bucket else raw
+
+            # Path-style:
+            # https://s3.<region>.amazonaws.com/bucket/key
+            if host.startswith("s3.") or host.startswith("s3-"):
+                segments = path.split("/", 1)
+                if len(segments) == 2 and segments[0] and segments[1]:
+                    return f"s3://{segments[0]}/{segments[1]}"
+        except Exception:
+            return raw
+
+        return raw
 
     def _resolve_generated_video_from_prefix(self, s3_uri: str) -> Optional[str]:
         if not self.s3_client:
@@ -203,7 +240,7 @@ class MotionVideoService:
                 "status": job.get("Status"),
                 "error_message": job.get("ErrorMessage"),
                 "output_group_details": job.get("OutputGroupDetails", []),
-                "output_s3_uri": output_s3_uri,
+                "output_s3_uri": self._canonicalize_s3_uri(output_s3_uri),
                 "service": "mediaconvert",
             }
         except Exception as e:
@@ -275,7 +312,7 @@ class MotionVideoService:
                 "status": response.get("status"),
                 "failure_message": response.get("failureMessage"),
                 "output_data_config": output_data_config,
-                "output_s3_uri": output_s3_uri,
+                "output_s3_uri": self._canonicalize_s3_uri(output_s3_uri),
                 "service": "nova_reel",
             }
         except Exception as e:

@@ -6,6 +6,8 @@
  */
 import { useState, type ReactNode } from "react";
 import { Loader2, Copy, Check } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 /* ── Inline Loader ──────────────────────────────────────── */
 export function Spinner() {
@@ -17,6 +19,27 @@ export function ResultBox({ children }: { children: ReactNode }) {
   return (
     <div className="mt-4 rounded-xl border border-border bg-muted/30 p-4 space-y-3 animate-fade-in">
       {children}
+    </div>
+  );
+}
+
+export function normalizeLLMText(text: string): string {
+  return text
+    .replace(/\*\*/g, "")
+    .replace(/__/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+export function LLMOutput({ text }: { text: string }) {
+  const safeText = normalizeLLMText(text);
+  if (!safeText) return null;
+
+  return (
+    <div className="llm-markdown text-sm text-muted-foreground leading-relaxed">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {safeText}
+      </ReactMarkdown>
     </div>
   );
 }

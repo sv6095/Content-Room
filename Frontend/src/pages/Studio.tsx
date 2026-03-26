@@ -8,9 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { Upload, FileText, Image, Music, Video, Wand2, Hash, FileSignature, Loader2, Sparkles, Copy, Check, Save, ArrowRight, Languages, Brain, ShieldCheck, Eye, Layers } from 'lucide-react';
-import { creationAPI, contentAPI, translationAPI, intelligenceAPI, motionAPI, APIError } from '@/services/api';
+import { creationAPI, contentAPI, translationAPI, intelligenceAPI, motionAPI, APIError, reportMediaError } from '@/services/api';
 import type { CultureRewriteResponse, RiskReachResponse, AntiCancelResponse, AssetExplosionResponse, MentalHealthResponse, ShadowbanResponse, ContentItem as SavedAssetItem } from '@/services/api';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { LLMOutput } from '@/components/shared/IntelPrimitives';
 
 type ContentType = 'text' | 'image' | 'audio' | 'video' | null;
 const FIXED_TEXT_MODEL = 'us.amazon.nova-lite-v1:0';
@@ -29,6 +30,7 @@ interface GeneratedContent {
 interface GeneratedImageAsset {
   image_url: string;
   preview_url?: string;
+  image_s3_uri?: string;
   engine: string;
   model_id: string;
   provider: string;
@@ -75,9 +77,102 @@ function isConcreteMediaUri(value?: string): boolean {
   );
 }
 
-interface IntelligencePackResult {
-  culture?: CultureRewriteResponse;
-  risk?: RiskReachResponse;
+function toCanonicalS3Uri(value?: string): string | undefined {
+  if (!value) return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  if (raw.startsWith('s3://')) return raw;
+  if (!raw.startsWith('http')) return raw;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.replace(/^\/+/, '');
+    if (!path) return raw;
+
+    if (host.includes('.s3.')) {
+      const bucket = host.split('.s3.')[0];
+      if (bucket) return `s3://${bucket}/${path}`;
+      return raw;
+    }
+
+    if (host.startsWith('s3.') || host.startsWith('s3-')) {
+      const [bucket, ...rest] = path.split('/');
+      const key = rest.join('/');
+      if (bucket && key) return `s3://${bucket}/${key}`;
+      return raw;
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+
+/** Prefer API presigned file_url; log issues for debugging. */
+  function savedAssetMediaUrl(asset: SavedAssetItem): string | undefined {
+    if (asset.file_url) {
+      console.debug(`[Media] Using presigned URL for asset ${asset.id}`);
+      return asset.file_url;
+    }
+    const fp = asset.file_path;
+    if (!fp) {
+      console.warn(`[Media] Asset ${asset.id} has no file_path or file_url`);
+      return undefined;
+    }
+    if (fp.startsWith('s3://')) {
+      console.error(`[Media] Asset ${asset.id} has unpresigned S3 URI: ${fp} - backend should return file_url`);
+      return undefined;
+    }
+    console.debug(`[Media] Using fallback path for asset ${asset.id}: ${fp}`);
+    return fp;
+  }
+
+  function handleMediaLoadError(assetId: string, contentType: string, error: React.SyntheticEvent<HTMLMediaElement>) {
+    console.error(`[Media] Failed to load ${contentType} for asset ${assetId}:`, error);
+    
+    // Report the error for debugging
+    reportMediaError(assetId, 'load-failure', {
+      contentType,
+      errorMessage: (error.target as HTMLMediaElement)?.error?.message || 'Unknown error',
+      userAgent: navigator.userAgent,
+    });
+    
+
+  /** Retry loading a failed asset by refreshing from API and re-rendering presigned URL */
+  const handleMediaRetry = useCallback(
+    async (assetId: string) => {
+      console.debug(`[Media] Retrying asset ${assetId}`);
+      try {
+        // Fetch fresh presigned URL from backend
+        const freshAsset = await contentAPI.get(assetId);
+        
+        // Update the saved assets with fresh data
+        setSavedAssets(prev =>
+          prev.map(asset =>
+            asset.id === assetId
+              ? {
+                  ...asset,
+                  file_url: freshAsset.file_url,
+                  file_path: freshAsset.file_path,
+                }
+              : asset
+          )
+        );
+        
+        // Clear from failed set so it re-renders
+        setFailedMediaAssets(prev => {
+          const next = new Set(prev);
+          next.delete(assetId);
+          return next;
+        });
+        
+        console.debug(`[Media] Successfully refreshed asset ${assetId}`);
+      } catch (error) {
+        console.error(`[Media] Failed to refresh asset ${assetId}:`, error);
+        // Leave in failed state with error message visible
+      }
+    },
+    []
+  );
   cancel?: AntiCancelResponse;
   assets?: AssetExplosionResponse;
   mental?: MentalHealthResponse;
@@ -227,6 +322,7 @@ export default function Studio() {
   const [imageActionLoading, setImageActionLoading] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<GeneratedImageAsset | null>(null);
   const [generatedImagePreviewFailed, setGeneratedImagePreviewFailed] = useState(false);
+  const [failedMediaAssets, setFailedMediaAssets] = useState<Set<string>>(new Set());
   const [uploadedPreviewUrl, setUploadedPreviewUrl] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [savedAssets, setSavedAssets] = useState<SavedAssetItem[]>([]);
@@ -266,6 +362,12 @@ export default function Studio() {
     setUploadedPreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [uploadedFile, selectedType]);
+
+  // Clear previous preview when switching Titan ↔ Nova so the next result is visibly new (avoids stale browser cache).
+  useEffect(() => {
+    setGeneratedImage(null);
+    setGeneratedImagePreviewFailed(false);
+  }, [imageEngine]);
 
   // Platform presets
   const platformPresets = {
@@ -588,6 +690,15 @@ export default function Studio() {
     setIntelligenceResult(null);
   };
 
+  function getIntelligenceSeedText() {
+    const primary = generatedContent?.caption?.trim()
+      || generatedContent?.summary?.trim()
+      || inputText.trim()
+      || extractedContent?.trim()
+      || '';
+    return primary;
+  }
+
   const canRunCompleteWorkflow = selectedType === 'text'
     ? inputText.trim().length > 0
     : uploadedFile !== null || inputText.trim().length > 0;
@@ -608,15 +719,6 @@ export default function Studio() {
     fast: 'Fast',
     balanced: 'Balanced',
     best_quality: 'Best Quality',
-  };
-
-  const getIntelligenceSeedText = () => {
-    const primary = generatedContent?.caption?.trim()
-      || generatedContent?.summary?.trim()
-      || inputText.trim()
-      || extractedContent?.trim()
-      || '';
-    return primary;
   };
 
   const ensureIntelligenceSeedText = async () => {
@@ -724,6 +826,7 @@ export default function Studio() {
       setGeneratedImage({
         image_url: res.image_url,
         preview_url: res.preview_url,
+        image_s3_uri: res.image_s3_uri,
         engine: res.engine,
         model_id: res.model_id,
         provider: res.provider,
@@ -748,7 +851,7 @@ export default function Studio() {
       const item = await contentAPI.create({
         content_type: 'image',
         original_text: generatedImage.prompt,
-        file_path: generatedImage.image_url,
+        file_path: generatedImage.image_s3_uri || generatedImage.image_url,
       });
       setSavedContentId(item.id);
       setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
@@ -770,7 +873,7 @@ export default function Studio() {
       const item = await contentAPI.create({
         content_type: 'video',
         original_text: inputText.trim() || undefined,
-        file_path: mediaConvertJob.output,
+        file_path: toCanonicalS3Uri(mediaConvertJob.output) || mediaConvertJob.output,
       });
       setSavedContentId(item.id);
       setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
@@ -792,7 +895,7 @@ export default function Studio() {
       const item = await contentAPI.create({
         content_type: 'video',
         original_text: novaReelPrompt.trim() || inputText.trim() || undefined,
-        file_path: novaReelJob.output,
+        file_path: toCanonicalS3Uri(novaReelJob.output) || novaReelJob.output,
       });
       setSavedContentId(item.id);
       setSavedAssets((prev) => [item, ...prev.filter((p) => p.id !== item.id)].slice(0, 12));
@@ -924,32 +1027,132 @@ export default function Studio() {
               <p className="text-sm text-muted-foreground">No saved assets yet. Save one from Creator Studio to see it here.</p>
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {savedAssets.map((asset) => (
+                {savedAssets.map((asset) => {
+                  const mediaUrl = savedAssetMediaUrl(asset);
+                  return (
                   <div key={asset.id} className="rounded-lg border p-3 bg-background space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs uppercase px-2 py-1 rounded bg-muted">{asset.content_type}</span>
                       <span className="text-[11px] text-muted-foreground">{new Date(asset.created_at).toLocaleString()}</span>
                     </div>
-                    {asset.caption && <p className="text-sm line-clamp-3">{asset.caption}</p>}
-                    {!asset.caption && asset.summary && <p className="text-sm line-clamp-3">{asset.summary}</p>}
-                    {!asset.caption && !asset.summary && asset.original_text && <p className="text-sm line-clamp-3">{asset.original_text}</p>}
+                    {asset.caption && <p className="text-sm whitespace-pre-wrap break-words">{asset.caption}</p>}
+                    {!asset.caption && asset.summary && <p className="text-sm whitespace-pre-wrap break-words">{asset.summary}</p>}
+                    {!asset.caption && !asset.summary && asset.original_text && <p className="text-sm whitespace-pre-wrap break-words">{asset.original_text}</p>}
 
                     {asset.file_path && asset.content_type === 'image' && (
-                      <img src={asset.file_url || asset.file_path} alt="Saved asset" className="w-full rounded border border-border" />
+                      failedMediaAssets.has(asset.id) ? (
+                        <div className="text-xs space-y-2 p-2 rounded bg-destructive/10 border border-destructive/20">
+                          <p className="font-semibold text-destructive">Image failed to load</p>
+                          <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
+                            <li>Presigned URL may have expired (24-hour limit)</li>
+                            <li>Network connectivity issue - check your connection</li>
+                            <li>CORS error - browser blocked the request</li>
+                          </ul>
+                          <div className="flex gap-2 pt-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => handleMediaRetry(asset.id)}
+                              className="text-xs h-7"
+                            >
+                              Refresh URL
+                            </Button>
+                            <a
+                              href={asset.file_path}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-primary hover:underline"
+                            >
+                              View S3 directly
+                            </a>
+                          </div>
+                        </div>
+                      ) : mediaUrl ? (
+                        <img src={mediaUrl} alt="Saved asset" className="w-full rounded border border-border" onError={(e) => handleMediaLoadError(asset.id, 'image', e)} />
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Loading preview… use Refresh if this persists.</p>
+                      )
                     )}
                     {asset.file_path && asset.content_type === 'video' && (
-                      <video src={asset.file_url || asset.file_path} controls className="w-full rounded border border-border" />
+                      failedMediaAssets.has(asset.id) ? (
+                        <div className="text-xs space-y-2 p-2 rounded bg-destructive/10 border border-destructive/20">
+                          <p className="font-semibold text-destructive">Video failed to load</p>
+                          <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
+                            <li>Presigned URL may have expired (24-hour limit)</li>
+                            <li>Network connectivity issue - check your connection</li>
+                            <li>Unsupported video format or codec</li>
+                          </ul>
+                          <div className="flex gap-2 pt-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => handleMediaRetry(asset.id)}
+                              className="text-xs h-7"
+                            >
+                              Refresh URL
+                            </Button>
+                            <a
+                              href={asset.file_path}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-primary hover:underline"
+                            >
+                              View S3 directly
+                            </a>
+                          </div>
+                        </div>
+                      ) : mediaUrl ? (
+                        <video src={mediaUrl} controls className="w-full rounded border border-border" onError={(e) => handleMediaLoadError(asset.id, 'video', e)} />
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Loading preview… use Refresh if this persists.</p>
+                      )
                     )}
                     {asset.file_path && asset.content_type === 'audio' && (
-                      <audio src={asset.file_url || asset.file_path} controls className="w-full" />
+                      failedMediaAssets.has(asset.id) ? (
+                        <div className="text-xs space-y-2 p-2 rounded bg-destructive/10 border border-destructive/20">
+                          <p className="font-semibold text-destructive">Audio failed to load</p>
+                          <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1">
+                            <li>Presigned URL may have expired (24-hour limit)</li>
+                            <li>Network connectivity issue - check your connection</li>
+                            <li>Unsupported audio format or codec</li>
+                          </ul>
+                          <div className="flex gap-2 pt-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => handleMediaRetry(asset.id)}
+                              className="text-xs h-7"
+                            >
+                              Refresh URL
+                            </Button>
+                            <a
+                              href={asset.file_path}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-primary hover:underline"
+                            >
+                              View S3 directly
+                            </a>
+                          </div>
+                        </div>
+                      ) : mediaUrl ? (
+                        <audio src={mediaUrl} controls className="w-full" onError={(e) => handleMediaLoadError(asset.id, 'audio', e)} />
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Loading preview… use Refresh if this persists.</p>
+                      )
                     )}
                     {asset.file_path && !['image', 'video', 'audio'].includes(asset.content_type) && (
-                      <a href={asset.file_path} target="_blank" rel="noreferrer" className="text-xs text-primary underline break-all">
-                        {asset.file_path}
-                      </a>
+                      asset.file_url || !asset.file_path.startsWith('s3://') ? (
+                        <a href={asset.file_url || asset.file_path} target="_blank" rel="noreferrer" className="text-xs text-primary underline break-all">
+                          {asset.file_path}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-muted-foreground break-all">{asset.file_path}</span>
+                      )
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -1349,23 +1552,38 @@ export default function Studio() {
                   {generatedImage && (
                     <div className="p-3 rounded-lg bg-background border space-y-3">
                       {generatedImagePreviewFailed ? (
-                        <div className="text-sm text-muted-foreground">
-                          Preview unavailable. Open image directly:{' '}
-                          <a
-                            href={generatedImage.image_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-primary underline break-all"
-                          >
-                            {generatedImage.image_url}
-                          </a>
+                        <div className="text-sm space-y-2">
+                          <div className="text-destructive font-medium">Preview failed to load</div>
+                          <ul className="list-disc list-inside text-xs text-muted-foreground">
+                            <li>Presigned URL may have expired</li>
+                            <li>Network connectivity issue</li>
+                            <li>Image generation may not have completed</li>
+                          </ul>
+                          <div className="text-xs">
+                            <a
+                              href={generatedImage.image_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline break-all"
+                            >
+                              Open image URL directly →
+                            </a>
+                          </div>
                         </div>
                       ) : (
                         <img
+                          key={`${generatedImage.model_id}-${generatedImage.image_url}`}
                           src={generatedImage.preview_url || generatedImage.image_url}
                           alt="Generated asset"
                           className="w-full max-w-xl rounded-lg border border-border"
-                          onError={() => setGeneratedImagePreviewFailed(true)}
+                          onError={(e) => {
+                            reportMediaError(generatedImage.image_url, 'load-failure', {
+                              contentType: 'generated-image',
+                              mediaUrl: generatedImage.preview_url || generatedImage.image_url,
+                              errorMessage: 'Generated image preview failed to load',
+                            });
+                            setGeneratedImagePreviewFailed(true);
+                          }}
                         />
                       )}
                       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -1710,7 +1928,7 @@ export default function Studio() {
                       {copiedField === 'caption' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                     </Button>
                   </div>
-                  <p className="text-sm whitespace-pre-wrap">{generatedContent.caption}</p>
+                  <LLMOutput text={generatedContent.caption} />
                 </div>
               )}
               {generatedContent.transcript && (
@@ -1726,7 +1944,7 @@ export default function Studio() {
                       {copiedField === 'transcript' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                     </Button>
                   </div>
-                  <p className="text-sm whitespace-pre-wrap">{generatedContent.transcript}</p>
+                  <LLMOutput text={generatedContent.transcript} />
                 </div>
               )}
               {generatedContent.summary && (
@@ -1742,7 +1960,7 @@ export default function Studio() {
                       {copiedField === 'summary' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                     </Button>
                   </div>
-                  <p className="text-sm whitespace-pre-wrap">{generatedContent.summary}</p>
+                  <LLMOutput text={generatedContent.summary} />
                 </div>
               )}
               {generatedContent.hashtags && generatedContent.hashtags.length > 0 && (
@@ -1820,7 +2038,7 @@ export default function Studio() {
                               {copiedField === 'translated-caption' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                             </Button>
                           </div>
-                          <p className="text-sm whitespace-pre-wrap">{translatedCaption}</p>
+                          <LLMOutput text={translatedCaption} />
                         </div>
                       )}
                       {translatedSummary && (
@@ -1838,7 +2056,7 @@ export default function Studio() {
                               {copiedField === 'translated-summary' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                             </Button>
                           </div>
-                          <p className="text-sm whitespace-pre-wrap">{translatedSummary}</p>
+                          <LLMOutput text={translatedSummary} />
                         </div>
                       )}
                     </div>
@@ -1892,7 +2110,7 @@ export default function Studio() {
                       {copiedField === 'intel-culture' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                     </Button>
                   </div>
-                  <p className="text-sm whitespace-pre-wrap">{intelligenceResult.culture.rewritten}</p>
+                  <LLMOutput text={intelligenceResult.culture.rewritten} />
                 </div>
               )}
 
@@ -1904,7 +2122,7 @@ export default function Studio() {
                       {copiedField === 'intel-risk' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                     </Button>
                   </div>
-                  <p className="text-sm whitespace-pre-wrap mb-2">{intelligenceResult.risk.generated}</p>
+                  <LLMOutput text={intelligenceResult.risk.generated} />
                   <div className="flex flex-wrap gap-2 text-xs">
                     <span className="px-2 py-1 rounded bg-background border">Safety: {intelligenceResult.risk.safety_score}</span>
                     <span className="px-2 py-1 rounded bg-background border">Engagement: {intelligenceResult.risk.estimated_engagement_probability}%</span>
@@ -1956,7 +2174,7 @@ export default function Studio() {
                     {intelligenceResult.assets.assets.slice(0, 6).map((asset, idx) => (
                       <div key={`${asset.asset_type}-${idx}`} className="p-2 rounded-lg bg-background border">
                         <p className="text-xs font-medium mb-1">{asset.platform}</p>
-                        <p className="text-xs text-muted-foreground line-clamp-3">{asset.content}</p>
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">{asset.content}</p>
                       </div>
                     ))}
                   </div>

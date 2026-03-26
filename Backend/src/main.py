@@ -16,6 +16,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from pathlib import Path
+from urllib.parse import urlparse
 import warnings
 
 
@@ -81,19 +82,56 @@ app = FastAPI(
 
 
 # CORS middleware must be configured before routers are included.
-origins = list(
-    dict.fromkeys(
-        [
-            "http://content-room-frontend-125903111660.s3-website.ap-south-1.amazonaws.com",
-        ]
-        + settings.cors_origins_list
-    )
-)
+def _origin_variants(origin: str) -> list[str]:
+    """Return normalized origin plus http/https variants for the same host."""
+    candidate = (origin or "").strip().rstrip("/")
+    if not candidate:
+        return []
+    if "://" in candidate:
+        parsed = urlparse(candidate)
+        host = parsed.netloc
+    else:
+        host = candidate
+    if not host:
+        return []
+    return [f"http://{host}", f"https://{host}"]
+
+
+def _build_allowed_origins() -> list[str]:
+    base = [
+        "http://content-room-frontend-125903111660.s3-website.ap-south-1.amazonaws.com",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    configured = settings.cors_origins_list + [settings.frontend_website_url or ""]
+    merged = []
+    for origin in base + configured:
+        if not origin:
+            continue
+        merged.extend(_origin_variants(origin))
+    # Preserve order while deduplicating and skipping placeholder values.
+    return [
+        o for o in dict.fromkeys(merged)
+        if "example.com" not in o
+    ]
+
+
+origins = _build_allowed_origins()
+
+cors_allow_origins = origins
+cors_allow_credentials = True
+# In debug, relax CORS to avoid "Failed to fetch" from browser-level CORS blocking.
+# (When using allow_origins="*", CORS spec forbids allow_credentials=true.)
+if settings.debug:
+    cors_allow_origins = ["*"]
+    cors_allow_credentials = False
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=cors_allow_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

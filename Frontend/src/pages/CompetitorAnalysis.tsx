@@ -10,6 +10,7 @@ import api, { APIError } from '@/services/api';
 import type { CompetitorAnalysisStructured } from '@/services/api';
 import { toast } from 'sonner';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
+import { useAuth } from '@/contexts/AuthContext';
 
 type InsightSection = {
     title: string;
@@ -83,6 +84,15 @@ function parsedFromStructured(
 
 function cleanMarkdownMarkers(text: string): string {
     return text.replace(/\*\*/g, '').replace(/__/g, '').trim();
+}
+
+function extractLeadingSourceNote(markdown: string): string | null {
+    const sourceMatch = markdown.trim().match(/^\*([^*]+)\*\s*/);
+    return sourceMatch ? sourceMatch[1].trim() : null;
+}
+
+function stripLeadingSourceNote(markdown: string): string {
+    return markdown.trim().replace(/^\*[^*]+\*\s*/, '').trim();
 }
 
 function parseSectionBlocks(body: string): InsightSection[] {
@@ -247,6 +257,110 @@ function parseInsightSections(markdown: string): ParsedInsight {
     return { sourceNote, strategy, scorecard, gaps, ideas, sections };
 }
 
+function numOrNull(v: unknown): number | null {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
+}
+
+function normImpactEffort(v: unknown, fallback: 'HIGH' | 'MEDIUM' | 'LOW'): 'HIGH' | 'MEDIUM' | 'LOW' {
+    const s = String(v ?? '').toUpperCase();
+    if (s === 'HIGH' || s === 'LOW') return s;
+    return fallback;
+}
+
+/**
+ * Accepts camelCase (API) or snake_case (some LLM outputs) and returns UI-ready structured analysis.
+ */
+function coerceCompetitorStructured(data: unknown): CompetitorAnalysisStructured | null {
+    if (!data || typeof data !== 'object') return null;
+    const o = data as Record<string, unknown>;
+
+    const strategy =
+        (typeof o.competitorStrategy === 'string' && o.competitorStrategy) ||
+        (typeof o.competitor_strategy === 'string' && o.competitor_strategy) ||
+        '';
+
+    const scoreRaw =
+        o.scorecard && typeof o.scorecard === 'object'
+            ? (o.scorecard as Record<string, unknown>)
+            : {};
+    const scorecard = {
+        contentQuality: numOrNull(scoreRaw.contentQuality ?? scoreRaw.content_quality),
+        engagement: numOrNull(scoreRaw.engagement),
+        consistency: numOrNull(scoreRaw.consistency),
+        innovation: numOrNull(scoreRaw.innovation),
+    };
+
+    const gapsRaw = Array.isArray(o.gaps) ? o.gaps : [];
+    const gaps: ParsedInsight['gaps'] = gapsRaw
+        .filter((g): g is Record<string, unknown> => !!g && typeof g === 'object')
+        .map((g) => ({
+            title: cleanMarkdownMarkers(String(g.title ?? g.name ?? 'Gap')),
+            impact: normImpactEffort(g.impact, 'MEDIUM'),
+            effort: normImpactEffort(g.effort, 'MEDIUM'),
+            description: cleanMarkdownMarkers(String(g.description ?? '')),
+            yourMove: cleanMarkdownMarkers(String(g.yourMove ?? g.your_move ?? '')),
+        }));
+
+    const ideasRaw = Array.isArray(o.winningIdeas)
+        ? o.winningIdeas
+        : Array.isArray(o.winning_ideas)
+          ? o.winning_ideas
+          : [];
+    const ideaTags = ['Quick Win', 'Credibility Boost', 'Engagement Driver', 'Long Game'] as const;
+    const ideas: CompetitorAnalysisStructured['winningIdeas'] = ideasRaw
+        .filter((i): i is Record<string, unknown> => !!i && typeof i === 'object')
+        .map((i) => {
+            const rawTag = String(i.tag ?? 'Quick Win');
+            const tag = ideaTags.includes(rawTag as (typeof ideaTags)[number])
+                ? (rawTag as (typeof ideaTags)[number])
+                : 'Quick Win';
+            return {
+                title: cleanMarkdownMarkers(String(i.title ?? '')),
+                format: cleanMarkdownMarkers(String(i.format ?? '')),
+                whyItWins: cleanMarkdownMarkers(String(i.whyItWins ?? i.why_it_wins ?? '')),
+                tag,
+            };
+        });
+
+    if (!strategy && gaps.length === 0 && ideas.length === 0) return null;
+
+    return {
+        competitorStrategy: strategy || 'Strategy details were returned in structured form.',
+        scorecard,
+        gaps,
+        winningIdeas: ideas,
+    };
+}
+
+function tryParseAnalysisStructured(raw: string): CompetitorAnalysisStructured | null {
+    const text = (raw || '').trim();
+    if (!text) return null;
+
+    const candidates: string[] = [text];
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) candidates.push(fenced[1].trim());
+    const objectBlock = text.match(/\{[\s\S]*\}/);
+    if (objectBlock?.[0]) candidates.push(objectBlock[0].trim());
+
+    for (const candidate of candidates) {
+        try {
+            const repaired = candidate
+                .replace(/[“”]/g, '"')
+                .replace(/[‘’]/g, "'")
+                .replace(/,\s*([}\]])/g, '$1');
+            const parsed = JSON.parse(repaired) as Record<string, unknown>;
+            const coerced = coerceCompetitorStructured(parsed);
+            if (coerced) return coerced;
+        } catch {
+            // Keep trying other candidate payloads.
+        }
+    }
+
+    return null;
+}
+
 const impactColors: Record<'HIGH' | 'MEDIUM' | 'LOW', string> = {
     HIGH: '#FF6B6B',
     MEDIUM: '#FFD700',
@@ -320,6 +434,7 @@ function parseFormatsFromIdeaText(formatText: string): string[] {
 
 const CompetitorAnalysis: React.FC = () => {
     const navigate = useNavigate();
+    const { user } = useAuth();
     const [url, setUrl] = useState('');
     const [niche, setNiche] = useState('');
     const [loading, setLoading] = useState(false);
@@ -329,8 +444,13 @@ const CompetitorAnalysis: React.FC = () => {
     const [copiedIdea, setCopiedIdea] = useState<number | null>(null);
     const [activeGap, setActiveGap] = useState<number | null>(null);
     const [activeTab, setActiveTab] = useState<'gaps' | 'strategy' | 'ideas'>('gaps');
-    const parsed: ParsedInsight = structured
-        ? parsedFromStructured(sourceNote, structured)
+    const parsedStructuredFromAnalysis = analysis ? tryParseAnalysisStructured(stripLeadingSourceNote(analysis)) : null;
+    const effectiveStructured = structured ?? parsedStructuredFromAnalysis;
+    const derivedSourceNote = sourceNote ?? (analysis ? extractLeadingSourceNote(analysis) : null);
+    const markdownBody = analysis && !effectiveStructured ? stripLeadingSourceNote(analysis) : '';
+
+    const parsed: ParsedInsight = effectiveStructured
+        ? parsedFromStructured(derivedSourceNote, effectiveStructured)
         : analysis
             ? parseInsightSections(analysis)
             : {
@@ -363,6 +483,8 @@ const CompetitorAnalysis: React.FC = () => {
 
     const competitorHandle = useMemo(() => handleFromUrl(url), [url]);
     const competitorPlatform = useMemo(() => platformFromUrl(url), [url]);
+    const userStorageSuffix = user?.id || user?.email || 'anonymous';
+    const calendarIdeaPrefillKey = `calendar-idea-prefill:${userStorageSuffix}`;
 
     const copyIdea = async (idea: WinningIdea, index: number) => {
         const text = `Title: ${idea.title}\nFormat: ${idea.format}\nWhy It Wins: ${idea.whyItWins}`;
@@ -380,7 +502,7 @@ const CompetitorAnalysis: React.FC = () => {
             tag: idea.tag ?? 'Quick Win',
             niche: niche || undefined,
         };
-        localStorage.setItem('calendar-idea-prefill', JSON.stringify(payload));
+        localStorage.setItem(calendarIdeaPrefillKey, JSON.stringify(payload));
         navigate('/calendar', {
             state: {
                 calendarIdea: payload,
@@ -403,13 +525,25 @@ const CompetitorAnalysis: React.FC = () => {
         setActiveGap(null);
 
         try {
+            console.log(`[CompetitorAnalysis] Starting analysis for url=${url}, niche=${niche}`);
             const response = await api.competitor.analyze(url, niche);
+            console.log(`[CompetitorAnalysis] API response received:`, response);
+            console.log(`[CompetitorAnalysis] Analysis length: ${response.analysis?.length || 0}`);
+            console.log(`[CompetitorAnalysis] Has structured data: ${!!response.analysis_structured}`);
+            console.log(`[CompetitorAnalysis] Source note: ${response.source_note}`);
+            
             setAnalysis(response.analysis);
             setSourceNote(response.source_note ?? null);
-            setStructured(response.analysis_structured ?? null);
+            setStructured(
+                response.analysis_structured != null
+                    ? coerceCompetitorStructured(response.analysis_structured) ?? null
+                    : null
+            );
+            
+            console.log(`[CompetitorAnalysis] State updated. Structured coerced to:`, structured);
             toast.success("Analysis complete!");
         } catch (error) {
-            console.error(error);
+            console.error(`[CompetitorAnalysis] Error:`, error);
             
             // Handle specific API errors
             if (error instanceof APIError) {
@@ -693,7 +827,7 @@ const CompetitorAnalysis: React.FC = () => {
                             {(activeTab === 'gaps' && parsed.gaps.length === 0) ||
                             (activeTab === 'ideas' && parsed.ideas.length === 0) ? (
                                 <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-primary prose-a:text-blue-500">
-                                    <ReactMarkdown>{analysis || ''}</ReactMarkdown>
+                                    <ReactMarkdown>{markdownBody}</ReactMarkdown>
                                 </article>
                             ) : null}
                         </CardContent>

@@ -120,6 +120,7 @@ class ImageGenerationService:
             image_url = upload.get("url")
             image_key = upload.get("key")
             image_provider = upload.get("provider")
+            image_bucket = upload.get("bucket")
             preview_url = image_url
 
             # When media is private, direct S3 object URLs can be inaccessible in browser.
@@ -141,6 +142,7 @@ class ImageGenerationService:
                 "image_url": image_url,
                 "preview_url": preview_url,
                 "image_key": image_key,
+                "image_s3_uri": f"s3://{image_bucket}/{image_key}" if image_provider == "s3" and image_bucket and image_key else None,
                 "provider": f"bedrock_{normalized_engine}",
             }
         except Exception as e:

@@ -82,6 +82,22 @@ async def _generate_with_validation(
 #   Agent B (Analyst)   → LLM analyzes patterns
 #   Agent C (Strategist)→ LLM generates actionable briefs
 
+def _extract_signal_section(raw: str, start_name: str, end_name: Optional[str]) -> str:
+    """Pull text between === SECTION === markers (used for single-call multi-agent output)."""
+    start_pat = rf"===\s*{re.escape(start_name)}\s*==="
+    end_pat = rf"===\s*{re.escape(end_name)}\s*===" if end_name else None
+    m_start = re.search(start_pat, raw, re.IGNORECASE)
+    if not m_start:
+        return ""
+    body_start = m_start.end()
+    if end_pat:
+        m_end = re.search(end_pat, raw[body_start:], re.IGNORECASE)
+        chunk = raw[body_start : body_start + m_end.start()] if m_end else raw[body_start:]
+    else:
+        chunk = raw[body_start:]
+    return chunk.strip()
+
+
 async def competitor_signal_intelligence(
     competitor_handles: List[str],
     niche: str,
@@ -91,7 +107,9 @@ async def competitor_signal_intelligence(
 ) -> dict:
     """
     Multi-Agent Signal Intelligence Pipeline.
-    Deploys 3 virtual agents to analyze competitors and generate content briefs.
+
+    Uses ONE LLM round-trip so total latency stays under API Gateway's ~30s limit
+    (sequential 3× calls often exceeded that and browsers reported "Failed to fetch").
     """
     from services.llm_service import get_llm_service
     llm = get_llm_service()
@@ -99,101 +117,66 @@ async def competitor_signal_intelligence(
     platforms_str = ", ".join(platforms) if platforms else "Instagram, YouTube, Twitter"
     handles_str = ", ".join(competitor_handles)
 
-    # ── Agent A: Scraper Agent (LLM intelligence proxy) ────────────────
-    scraper_prompt = f"""Agent A (signal scraper).
+    combined_prompt = f"""You are a multi-agent intelligence system. Answer in ONE response with THREE sections in order.
+Each section MUST start with its header line exactly as shown (including === markers).
+
+=== AGENT_A_SCRAPER ===
+Agent A (signal scraper).
 Competitors: {handles_str}
 Platforms: {platforms_str}
 Niche: {niche}
 Region: {region}
 
 Build a realistic intelligence estimate from typical public creator behavior (use ranges, avoid presenting invented facts as verified).
-Return sections:
+Include these labeled blocks:
 TOP_POST_PATTERNS
 HOOK_PATTERNS
 POSTING_CADENCE
 HASHTAG_STRATEGY
 FORMAT_DISTRIBUTION
-"""
 
-    agent_a_result = await _generate_with_validation(
-        llm,
-        scraper_prompt,
-        task="signal_intel_scraper",
-        max_tokens=520,
-        user_id=user_id,
-        required_markers=[
-            "TOP_POST_PATTERNS",
-            "HOOK_PATTERNS",
-            "POSTING_CADENCE",
-            "HASHTAG_STRATEGY",
-            "FORMAT_DISTRIBUTION",
-        ],
-    )
-
-    # ── Agent B: Analyst Agent ────────────────────────────────────
-    analyst_prompt = f"""Agent B (competitive analyst).
-Niche: {niche}
-Input from Agent A:
-{agent_a_result['text'][:1200]}
-
-Return concise sections:
+=== AGENT_B_ANALYST ===
+Agent B (competitive analyst) for niche={niche}.
+Base your analysis on the scraper output you wrote in AGENT_A_SCRAPER above.
+Include:
 VIRALITY_PATTERNS
 CONTENT_GAPS
 TIMING_INSIGHTS
 AUDIENCE_SENTIMENT
 WEAKNESS_MAP
-Use specific, actionable insights with estimated confidence where needed.
-"""
 
-    agent_b_result = await _generate_with_validation(
-        llm,
-        analyst_prompt,
-        task="signal_intel_analyst",
-        max_tokens=520,
-        user_id=user_id,
-        required_markers=[
-            "VIRALITY_PATTERNS",
-            "CONTENT_GAPS",
-            "TIMING_INSIGHTS",
-            "AUDIENCE_SENTIMENT",
-            "WEAKNESS_MAP",
-        ],
-    )
-
-    # ── Agent C: Strategist Agent ─────────────────────────────────
-    strategist_prompt = f"""Agent C (content strategist) for niche={niche}, region={region}.
-Input from Agent B:
-{agent_b_result['text'][:1200]}
-
-Create 5 content briefs.
-For each brief include:
+=== AGENT_C_STRATEGIST ===
+Agent C (content strategist) for niche={niche}, region={region}.
+Base strategy on AGENT_B_ANALYST above.
+Create 5 content briefs; each brief must include:
 TITLE
 FORMAT
 HOOK (2 lines)
 ANGLE
 URGENCY (HIGH/MEDIUM/LOW)
-
-Then include:
+Then add:
 WEEKLY_STRATEGY_SUMMARY (3 sentences)
 CONTENT_CALENDAR_SUGGESTION (this week)
 """
 
-    agent_c_result = await _generate_with_validation(
-        llm,
-        strategist_prompt,
-        task="signal_intel_strategist",
-        max_tokens=560,
+    result = await llm.generate(
+        combined_prompt,
+        task="signal_intel_combined",
+        max_tokens=4000,
         user_id=user_id,
-        required_markers=[
-            "TITLE",
-            "FORMAT",
-            "HOOK",
-            "ANGLE",
-            "URGENCY",
-            "WEEKLY_STRATEGY_SUMMARY",
-            "CONTENT_CALENDAR_SUGGESTION",
-        ],
     )
+    raw = (result.get("text") or "").strip()
+    provider = result.get("provider") or "unknown"
+
+    scraper_text = _extract_signal_section(raw, "AGENT_A_SCRAPER", "AGENT_B_ANALYST")
+    analyst_text = _extract_signal_section(raw, "AGENT_B_ANALYST", "AGENT_C_STRATEGIST")
+    strategist_text = _extract_signal_section(raw, "AGENT_C_STRATEGIST", None)
+
+    if not scraper_text or not analyst_text or not strategist_text:
+        raise RuntimeError(
+            "Signal Intelligence: model did not return all three sections (AGENT_A/B/C). "
+            "Try again or shorten competitor list."
+        )
 
     return {
         "competitor_handles": competitor_handles,
@@ -202,25 +185,21 @@ CONTENT_CALENDAR_SUGGESTION (this week)
         "agents": {
             "scraper": {
                 "name": "Agent A — Scraper",
-                "output": agent_a_result["text"],
-                "provider": agent_a_result["provider"],
+                "output": scraper_text,
+                "provider": provider,
             },
             "analyst": {
                 "name": "Agent B — Analyst",
-                "output": agent_b_result["text"],
-                "provider": agent_b_result["provider"],
+                "output": analyst_text,
+                "provider": provider,
             },
             "strategist": {
                 "name": "Agent C — Strategist",
-                "output": agent_c_result["text"],
-                "provider": agent_c_result["provider"],
+                "output": strategist_text,
+                "provider": provider,
             },
         },
-        "provider_chain": [
-            agent_a_result["provider"],
-            agent_b_result["provider"],
-            agent_c_result["provider"],
-        ],
+        "provider_chain": [provider, provider, provider],
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -303,8 +282,8 @@ async def hyper_local_trend_injection(
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    # ── Trend Discovery Agent ─────────────────────────────────────
-    trend_prompt = f"""You are a Hyper-Local Trend Discovery Agent for {region}, India.
+    # Single LLM call (two sequential calls often exceeded API Gateway ~30s limit).
+    combined_prompt = f"""You are a Hyper-Local Trend + Content Agent for {region}, India.
 
 Current date context: {datetime.now().strftime('%B %Y')}
 Region: {region}
@@ -313,56 +292,51 @@ Major festivals: {', '.join(region_data['festivals'])}
 Local trending topics: {', '.join(region_data['local_topics'])}
 Creator niche: {niche}
 
+Original content to enhance:
+{content}
+
+Respond with TWO sections in order (use these exact headers):
+
+=== TREND_DISCOVERY ===
 Return top 5 trend opportunities for {niche}.
 For each: TREND | WHY | RELEVANCE(1-10) | HOOK | HASHTAGS(3).
 Be region-specific, avoid generic filler.
-"""
 
-    trends_result = await _generate_with_validation(
-        llm,
-        trend_prompt,
-        task="rag_trend_discovery",
-        max_tokens=420,
-        user_id=user_id,
-        required_markers=["TREND", "WHY", "RELEVANCE", "HOOK", "HASHTAGS"],
-    )
-
-    # ── Content Injection Agent ───────────────────────────────────
-    injection_prompt = f"""Role: regional content enhancer for {region}.
-Niche: {niche}
-Primary language: {region_data['languages'][0]} (code-switch with English if natural)
-Original content:
-{content}
-
-Trend candidates:
-{trends_result['text'][:900]}
-
-Rewrite by naturally injecting 2-3 relevant trends while preserving core message.
-Output EXACT sections:
+=== CONTENT_INJECTION ===
+Primary language: {region_data['languages'][0]} (code-switch with English if natural).
+Rewrite the original content by naturally injecting 2-3 relevant trends from TREND_DISCOVERY while preserving the core message.
+Output EXACT labeled sections:
 ENHANCED_CONTENT:
 INJECTED_TRENDS:
 LOCAL_HASHTAGS:
 CULTURAL_NOTES:
 """
 
-    injection_result = await _generate_with_validation(
-        llm,
-        injection_prompt,
-        task="rag_trend_injection",
-        max_tokens=520,
+    combined = await llm.generate(
+        combined_prompt,
+        task="rag_trend_injection_combined",
+        max_tokens=2200,
         user_id=user_id,
-        required_markers=["ENHANCED_CONTENT", "INJECTED_TRENDS", "LOCAL_HASHTAGS", "CULTURAL_NOTES"],
     )
+    raw = (combined.get("text") or "").strip()
+    provider = combined.get("provider") or "unknown"
+
+    trend_block = _extract_signal_section(raw, "TREND_DISCOVERY", "CONTENT_INJECTION")
+    injection_block = _extract_signal_section(raw, "CONTENT_INJECTION", None)
+    if not trend_block or not injection_block:
+        raise RuntimeError(
+            "Trend Injection: model did not return TREND_DISCOVERY and CONTENT_INJECTION sections."
+        )
 
     return {
         "original_content": content,
         "region": region,
         "niche": niche,
         "region_context": region_data,
-        "trending_topics": trends_result["text"],
-        "enhanced_content": injection_result["text"],
-        "trend_provider": trends_result["provider"],
-        "injection_provider": injection_result["provider"],
+        "trending_topics": trend_block,
+        "enhanced_content": injection_block,
+        "trend_provider": provider,
+        "injection_provider": provider,
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -414,7 +388,14 @@ async def multimodal_production(
     llm = get_llm_service()
     import asyncio
 
+    # Cap parallel LLM calls so we stay within API Gateway ~30s (many formats at once can exceed it).
+    sem = asyncio.Semaphore(4)
+
     async def generate_format(fmt_key: str) -> dict:
+        async with sem:
+            return await _generate_format_inner(fmt_key)
+
+    async def _generate_format_inner(fmt_key: str) -> dict:
         fmt = PRODUCTION_FORMATS.get(fmt_key, {"name": fmt_key, "description": ""})
 
         prompt = f"""You are a Multimodal Content Production Agent.
@@ -435,7 +416,7 @@ Return only final document.
                 llm,
                 prompt,
                 task=f"multimodal_{fmt_key}",
-                max_tokens=520,
+                max_tokens=1400,
                 user_id=user_id,
                 required_markers=None,
                 min_len=80,
@@ -517,13 +498,15 @@ async def auto_publish_preview(
     """
     Platform Adapter — generates platform-optimized previews
     showing how content differs per platform (no actual publishing).
+
+    Platforms are generated in parallel so total time stays within API Gateway limits.
     """
     from services.llm_service import get_llm_service
+    import asyncio
+
     llm = get_llm_service()
 
-    platform_previews = []
-
-    for platform in platforms:
+    async def adapt_one(platform: str) -> dict:
         specs = PLATFORM_SPECS.get(platform.lower(), PLATFORM_SPECS["instagram"])
 
         prompt = f"""Role: platform adapter for {platform}.
@@ -548,7 +531,7 @@ No placeholders.
                 llm,
                 prompt,
                 task=f"autopublish_{platform}",
-                max_tokens=420,
+                max_tokens=900,
                 user_id=user_id,
                 required_markers=[
                     "OPTIMIZED_CONTENT",
@@ -565,7 +548,7 @@ No placeholders.
             recommended_time = schedule_time or (time_match.group(1).strip() if time_match else None)
             if not recommended_time:
                 recommended_time = specs.get("best_times", ["12:00 PM"])[0]
-            platform_previews.append({
+            return {
                 "platform": platform,
                 "optimized_content": output_text,
                 "provider": result["provider"],
@@ -573,18 +556,21 @@ No placeholders.
                 "recommended_time": recommended_time,
                 "status": "ready_to_publish",
                 "success": True,
-            })
+            }
         except Exception as e:
-            platform_previews.append({
+            logger.error("Platform adapt failed for %s: %s", platform, e)
+            return {
                 "platform": platform,
                 "optimized_content": "",
                 "provider": "error",
                 "error": str(e)[:160],
-                "specs": specs,
+                "specs": PLATFORM_SPECS.get(platform.lower(), PLATFORM_SPECS["instagram"]),
                 "recommended_time": None,
                 "status": "failed",
                 "success": False,
-            })
+            }
+
+    platform_previews = list(await asyncio.gather(*[adapt_one(p) for p in platforms]))
 
     successful_count = sum(1 for p in platform_previews if p["success"])
     if successful_count == 0:
@@ -725,7 +711,7 @@ Rules:
         llm,
         schedule_prompt,
         task="burnout_schedule",
-        max_tokens=560,
+        max_tokens=1200,
         user_id=user_id,
         required_markers=["TASK", "EFFORT", "FORMAT", "TOPIC", "WELLNESS_TIP", "CREATOR_WELLNESS_SCORE"],
     )

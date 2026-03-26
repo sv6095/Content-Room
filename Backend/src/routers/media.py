@@ -300,9 +300,11 @@ async def generate_image(
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt is required")
     try:
+        # One shared image_generation budget for both Titan and Nova Canvas.
+        # Do NOT use _consume_best_tier_nova_quota_or_raise here: that flag is shared with
+        # Nova Reel and is single-use per user, so switching to Nova Canvas would 403
+        # after any prior Nova-tier action and block every subsequent Nova image attempt.
         _consume_modality_quota_or_raise(current_user, "image", limit=3)
-        if request.engine.strip().lower() == "nova_canvas":
-            _consume_best_tier_nova_quota_or_raise(current_user)
         service = get_image_generation_service()
         return await service.generate(
             prompt=request.prompt.strip(),

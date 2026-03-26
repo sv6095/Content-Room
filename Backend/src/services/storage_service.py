@@ -14,12 +14,57 @@ import uuid
 import mimetypes
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, Any, BinaryIO
+from typing import Optional, Dict, Any, BinaryIO, Tuple
 from abc import ABC, abstractmethod
+from urllib.parse import unquote, urlparse
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def parse_s3_bucket_and_key(reference: str) -> Optional[Tuple[str, str]]:
+    """
+    Extract (bucket, key) from s3:// URIs or common HTTPS S3 URL shapes.
+
+    Supports virtual-hosted URLs (bucket.s3.region.amazonaws.com/key) and
+    path-style (s3.region.amazonaws.com/bucket/key). Path-style must be
+    distinguished from virtual-hosted — the latter incorrectly used the full
+    path as the object key when the bucket was private.
+    """
+    if not reference or not str(reference).strip():
+        return None
+    raw = str(reference).strip()
+    if raw.startswith("s3://"):
+        rest = raw[5:]
+        slash = rest.find("/")
+        if slash == -1:
+            ub = unquote(rest)
+            return (ub, "") if ub else None
+        b, k = rest[:slash], rest[slash + 1 :]
+        b, k = unquote(b), unquote(k)
+        return (b, k) if b and k else None
+
+    if not raw.lower().startswith("http"):
+        return None
+    try:
+        parsed = urlparse(raw)
+        host = (parsed.netloc or "").strip().lower()
+        path = unquote((parsed.path or "").lstrip("/"))
+        if not host or not path:
+            return None
+        # Virtual-hosted: mybucket.s3.ap-south-1.amazonaws.com/object/key
+        if ".s3." in host and not (host.startswith("s3.") or host.startswith("s3-")):
+            bucket = host.split(".s3.", 1)[0]
+            return (bucket, path) if bucket else None
+        # Path-style: s3.ap-south-1.amazonaws.com/bucket/object/key
+        if host.startswith("s3.") or host.startswith("s3-"):
+            parts = path.split("/", 1)
+            if len(parts) == 2 and parts[0] and parts[1]:
+                return (parts[0], unquote(parts[1]))
+    except Exception:
+        return None
+    return None
 
 
 # ============================================
@@ -164,6 +209,24 @@ class S3StorageProvider(BaseStorageProvider):
             return url
         except Exception as e:
             logger.error(f"S3 URL generation error: {e}")
+            raise StorageError(f"Failed to generate URL: {e}")
+
+    async def get_presigned_url_for_bucket_key(
+        self, bucket: str, key: str, expires_in: int = 3600
+    ) -> str:
+        """Presign GET for an explicit bucket/key (any bucket the caller can access)."""
+        if not self.client:
+            raise StorageError("S3 not configured")
+        if not bucket or not key:
+            raise StorageError("bucket and key are required")
+        try:
+            return self.client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": key},
+                ExpiresIn=expires_in,
+            )
+        except Exception as e:
+            logger.error(f"S3 presign for bucket=%s key=%s: {e}", bucket, key[:80])
             raise StorageError(f"Failed to generate URL: {e}")
 
     async def create_presigned_upload_url(
@@ -454,6 +517,25 @@ class StorageService:
             if name == provider:
                 return await prov.get_url(file_key, expires_in)
         raise StorageError(f"Provider {provider} not found")
+
+    async def get_presigned_url_for_file_reference(
+        self, file_ref: str, expires_in: int = 3600
+    ) -> str:
+        """
+        Return a presigned HTTPS URL for any S3 reference (s3:// or HTTPS S3 URL).
+        Uses bucket and key from the reference so private buckets and
+        MediaConvert/Nova outputs in alternate buckets are still accessible.
+        """
+        parsed = parse_s3_bucket_and_key(file_ref)
+        if not parsed:
+            raise StorageError("Not a recognized S3 URL or reference")
+        bucket, key = parsed
+        for name, prov in self.providers:
+            if name == "s3" and prov.is_available():
+                return await prov.get_presigned_url_for_bucket_key(
+                    bucket, key, expires_in=expires_in
+                )
+        raise StorageError("S3 is not configured")
     
     def get_status(self) -> Dict[str, bool]:
         """Get availability status of all providers."""

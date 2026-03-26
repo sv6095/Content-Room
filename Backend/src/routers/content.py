@@ -7,13 +7,16 @@ Supports workflow: Create -> Moderate -> Translate -> Schedule.
 import logging
 from datetime import datetime
 from typing import Optional, List
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from routers.auth import CurrentUser, get_current_user
 from services.dynamo_repositories import get_content_repo
-from services.storage_service import get_storage_service
+from services.storage_service import (
+    StorageError,
+    get_storage_service,
+    parse_s3_bucket_and_key,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -40,7 +43,7 @@ class ContentItem(BaseModel):
     original_text: Optional[str] = None
     caption: Optional[str] = None
     summary: Optional[str] = None
-    hashtags: Optional[dict] = None
+    hashtags: Optional[dict | List[str]] = None
     file_path: Optional[str] = None
     file_url: Optional[str] = None
     translated_text: Optional[str] = None
@@ -69,6 +72,10 @@ def _workflow_status(content: dict, is_scheduled: bool) -> str:
 
 
 async def _resolve_accessible_file_url(file_path: Optional[str]) -> Optional[str]:
+    """
+    Private S3 objects need presigned URLs. Uses bucket+key from the stored
+    reference (including path-style HTTPS URLs and alternate output buckets).
+    """
     if not file_path:
         return None
 
@@ -76,30 +83,18 @@ async def _resolve_accessible_file_url(file_path: Optional[str]) -> Optional[str
     if not raw:
         return None
 
-    if raw.startswith("s3://"):
+    if parse_s3_bucket_and_key(raw):
         try:
-            uri = raw[5:]
-            slash_idx = uri.find("/")
-            if slash_idx == -1:
-                return raw
-            key = uri[slash_idx + 1:]
-            if not key:
-                return raw
             storage = get_storage_service()
-            return await storage.get_url(file_key=key, provider="s3", expires_in=24 * 60 * 60)
-        except Exception:
-            return raw
-
-    if ".s3." in raw and raw.startswith("http"):
-        try:
-            parsed = urlparse(raw)
-            key = parsed.path.lstrip("/")
-            if not key:
-                return raw
-            storage = get_storage_service()
-            return await storage.get_url(file_key=key, provider="s3", expires_in=24 * 60 * 60)
-        except Exception:
-            return raw
+            return await storage.get_presigned_url_for_file_reference(
+                raw, expires_in=24 * 60 * 60
+            )
+        except StorageError as e:
+            logger.warning("Could not presign file reference: %s", e)
+            return None
+        except Exception as e:
+            logger.warning("Unexpected error presigning file URL: %s", e)
+            return None
 
     return raw
 

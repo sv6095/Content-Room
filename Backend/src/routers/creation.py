@@ -9,13 +9,15 @@ Handles AI-powered content generation - NO AUTH REQUIRED.
 - Media content extraction (image/audio/video)
 """
 import logging
+import hashlib
+import json
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Depends
 from pydantic import BaseModel
 
 from routers.auth import CurrentUser, get_current_user_optional
-from services.dynamo_repositories import get_users_repo
+from services.dynamo_repositories import get_users_repo, get_ai_cache_repo
 from services.llm_service import get_llm_service, AllProvidersFailedError
 from services.vision_service import get_vision_service
 from services.speech_service import get_speech_service, SpeechError
@@ -26,6 +28,36 @@ router = APIRouter()
 llm = get_llm_service()
 vision = get_vision_service()
 speech = get_speech_service()
+
+
+def _build_creation_cache_key(feature: str, payload: dict) -> str:
+    return json.dumps({"feature": feature, "payload": payload}, sort_keys=True, ensure_ascii=False)
+
+
+def _get_creation_cached(feature: str, payload: dict) -> Optional[dict]:
+    try:
+        cache_key = _build_creation_cache_key(feature, payload)
+        cached = get_ai_cache_repo().get(cache_key, f"creation:{feature}")
+        if not cached or not cached.get("response"):
+            return None
+        parsed = json.loads(cached["response"])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception as exc:
+        logger.warning("Creation cache read failed for %s: %s", feature, exc)
+        return None
+
+
+def _put_creation_cached(feature: str, payload: dict, result: dict, ttl_days: int = 7) -> None:
+    try:
+        cache_key = _build_creation_cache_key(feature, payload)
+        get_ai_cache_repo().put(
+            cache_key,
+            f"creation:{feature}",
+            json.dumps(result, ensure_ascii=False),
+            ttl_days=max(1, ttl_days),
+        )
+    except Exception as exc:
+        logger.warning("Creation cache write failed for %s: %s", feature, exc)
 
 
 class GenerateRequest(BaseModel):
@@ -302,11 +334,22 @@ async def extract_and_generate(
     try:
         extracted_content = ""
         providers = []
+        image_bytes: Optional[bytes] = None
+        audio_bytes: Optional[bytes] = None
+        video_bytes: Optional[bytes] = None
         
         # Extract from image
         if image:
             image_bytes = await image.read()
-            image_analysis = await vision.analyze(image_bytes)
+            image_hash = hashlib.sha256(image_bytes).hexdigest()
+            image_cache_payload = {
+                "image_hash": image_hash,
+                "filename": image.filename or "image",
+            }
+            image_analysis = _get_creation_cached("extract_image_analysis", image_cache_payload)
+            if not image_analysis:
+                image_analysis = await vision.analyze(image_bytes)
+                _put_creation_cached("extract_image_analysis", image_cache_payload, image_analysis, ttl_days=3)
             
             # Extract content labels and descriptions
             labels = image_analysis.get("content_labels", [])
@@ -321,10 +364,20 @@ async def extract_and_generate(
         # Extract from audio
         if audio:
             audio_bytes = await audio.read()
-            transcript_result = await speech.transcribe_bytes(
-                audio_bytes, 
-                audio.filename or "audio.wav"
-            )
+            audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+            transcript_cache_payload = {
+                "audio_hash": audio_hash,
+                "filename": audio.filename or "audio.wav",
+                "language": language or "en",
+            }
+            transcript_result = _get_creation_cached("extract_audio_transcript", transcript_cache_payload)
+            if not transcript_result:
+                transcript_result = await speech.transcribe_bytes(
+                    audio_bytes,
+                    audio.filename or "audio.wav",
+                    language,
+                )
+                _put_creation_cached("extract_audio_transcript", transcript_cache_payload, transcript_result, ttl_days=7)
             transcript = transcript_result.get("text", "")
             if transcript:
                 extracted_content += f"Audio transcript: {transcript} "
@@ -411,6 +464,25 @@ async def transcribe_audio(
     Whisper -> Google Speech -> simple fallback.
     """
     try:
+        audio_bytes = await audio.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        transcript_cache_payload = {
+            "audio_hash": hashlib.sha256(audio_bytes).hexdigest(),
+            "filename": audio.filename or "audio.wav",
+            "language": language or "auto",
+        }
+        cached_result = _get_creation_cached("transcribe_audio", transcript_cache_payload)
+        if cached_result:
+            return TranscribeResponse(
+                text=(cached_result.get("text") or "").strip(),
+                language=cached_result.get("language", language or "en"),
+                provider=cached_result.get("provider", "speech"),
+                fallback_used=bool(cached_result.get("fallback_used", False)),
+                segments=cached_result.get("segments", []),
+            )
+
         if not current_user:
             raise HTTPException(
                 status_code=401,
@@ -427,15 +499,12 @@ async def transcribe_audio(
                 detail="Voice actions are limited to 3 per user in Creator Studio",
             )
 
-        audio_bytes = await audio.read()
-        if not audio_bytes:
-            raise HTTPException(status_code=400, detail="Empty audio file")
-
         transcript_result = await speech.transcribe_bytes(
             audio_bytes,
             audio.filename or "audio.wav",
             language,
         )
+        _put_creation_cached("transcribe_audio", transcript_cache_payload, transcript_result, ttl_days=7)
 
         return TranscribeResponse(
             text=transcript_result.get("text", "").strip(),

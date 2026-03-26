@@ -203,6 +203,41 @@
   .ui-note {
     @apply rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground leading-relaxed;
   }
+
+  .llm-markdown {
+    @apply max-w-none text-sm leading-relaxed;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .llm-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .llm-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .llm-markdown p,
+  .llm-markdown li,
+  .llm-markdown blockquote {
+    margin: 0.2rem 0;
+  }
+
+  .llm-markdown ul,
+  .llm-markdown ol {
+    padding-left: 1rem;
+    margin: 0.25rem 0;
+  }
+
+  .llm-markdown h1,
+  .llm-markdown h2,
+  .llm-markdown h3,
+  .llm-markdown h4 {
+    @apply text-foreground;
+    margin: 0.4rem 0 0.2rem;
+  }
   
   /* Database Animation */
   /* Note: offset-anchor requires Chrome 116+ for full support.

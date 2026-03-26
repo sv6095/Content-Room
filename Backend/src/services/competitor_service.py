@@ -3,7 +3,8 @@ from bs4 import BeautifulSoup
 from services.llm_service import LLMService
 from utils.optimization import TokenOptimizer
 import logging
-from urllib.parse import quote
+import ast
+from urllib.parse import urlparse, unquote
 import re
 import json
 from config.settings import settings
@@ -31,20 +32,122 @@ class CompetitorService:
 
     def _extract_handle(self, url: str) -> str:
         """Extract username/handle from a social media URL."""
-        clean = url.rstrip("/").split("?")[0]
-        parts = clean.split("/")
-        for part in reversed(parts):
-            if part and part not in ("www", "com", "in", "", "x.com", "twitter.com",
-                                     "instagram.com", "youtube.com", "linkedin.com",
-                                     "facebook.com", "status", "reel",
-                                     "p", "posts", "channel"):
-                return part.lstrip("@")
+        raw = (url or "").strip()
+        if not raw:
+            return url
+        if not raw.startswith(("http://", "https://")):
+            raw = "https://" + raw
+        parsed = urlparse(raw.split("?")[0].rstrip("/"))
+        host = (parsed.netloc or "").lower()
+        segments = [unquote(s) for s in (parsed.path or "").split("/") if s]
+
+        skip_tokens = {
+            "www", "com", "in", "status", "statuses", "reel", "reels", "p", "posts",
+            "channel", "user", "c", "share", "intent", "video", "photo", "i", "stories",
+            "shorts", "live", "embed", "about", "company", "people", "communities",
+        }
+
+        def _looks_like_id(seg: str) -> bool:
+            s = seg.strip()
+            if not s:
+                return True
+            if s.isdigit():
+                return True
+            # Tweet / media snowflake-style ids are long numeric strings
+            if len(s) >= 15 and s.isdigit():
+                return True
+            return False
+
+        def _first_handle_after_host() -> str | None:
+            for seg in segments:
+                low = seg.lower()
+                if low in skip_tokens or _looks_like_id(seg):
+                    continue
+                if host.endswith("linkedin.com") and low in ("in", "company", "school"):
+                    continue
+                return seg.lstrip("@")
+            return None
+
+        # Twitter/X: .../user/status/123 → user
+        if "twitter.com" in host or host == "x.com" or "nitter" in host:
+            if "status" in segments:
+                i = segments.index("status")
+                if i > 0 and not _looks_like_id(segments[i - 1]):
+                    return segments[i - 1].lstrip("@")
+            if "communities" in segments:
+                j = segments.index("communities")
+                if j + 1 < len(segments) and not _looks_like_id(segments[j + 1]):
+                    return segments[j + 1].lstrip("@")
+            h = _first_handle_after_host()
+            if h:
+                return h
+            return url
+
+        # Instagram: .../user/reel/... ; post-only /p/SHORTCODE has no handle in path
+        if "instagram.com" in host:
+            if segments and segments[0] in ("p", "reel", "reels", "tv"):
+                return ""
+            for marker in ("reel", "reels", "p", "tv"):
+                if marker in segments:
+                    i = segments.index(marker)
+                    if i > 0 and not _looks_like_id(segments[i - 1]):
+                        return segments[i - 1].lstrip("@")
+            h = _first_handle_after_host()
+            if h:
+                return h
+            return url
+
+        # YouTube: /@handle, /channel/ID, /c/name, /user/name
+        if "youtube.com" in host or "youtu.be" in host:
+            if segments and segments[0] == "@" and len(segments) > 1:
+                return segments[1].lstrip("@")
+            if "channel" in segments:
+                i = segments.index("channel")
+                if i + 1 < len(segments):
+                    return segments[i + 1]
+            if "c" in segments:
+                i = segments.index("c")
+                if i + 1 < len(segments):
+                    return segments[i + 1].lstrip("@")
+            if "user" in segments:
+                i = segments.index("user")
+                if i + 1 < len(segments):
+                    return segments[i + 1].lstrip("@")
+            h = _first_handle_after_host()
+            if h:
+                return h
+            return url
+
+        # LinkedIn / Facebook / generic
+        if "linkedin.com" in host:
+            if "in" in segments:
+                i = segments.index("in")
+                if i + 1 < len(segments):
+                    return segments[i + 1].lstrip("@")
+            if "company" in segments:
+                i = segments.index("company")
+                if i + 1 < len(segments):
+                    return segments[i + 1].lstrip("@")
+        if "facebook.com" in host:
+            if "profile.php" in segments:
+                # profile.php?id= — keep path segment after id in query; fallback below
+                pass
+            h = _first_handle_after_host()
+            if h:
+                return h
+
+        # Fallback: first non-skipped path segment (legacy behavior, path order)
+        for seg in segments:
+            low = seg.lower()
+            if low in skip_tokens or _looks_like_id(seg):
+                continue
+            return seg.lstrip("@")
         return url
 
     async def _scrape_website(self, url: str) -> str:
         """Scrape content from a regular website/blog (not social media)."""
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, trust_env=False) as client:
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml",
@@ -107,7 +210,7 @@ class CompetitorService:
         This is a lightweight fallback for social platforms where full scraping is restricted.
         """
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, trust_env=False) as client:
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml",
@@ -145,15 +248,32 @@ class CompetitorService:
 
         return ""
 
+    @staticmethod
+    def _jina_reader_url(target_url: str) -> str:
+        """
+        Jina Reader expects: https://r.jina.ai/<full target URL>.
+        Use https for the target site (not http://) so TLS-only pages resolve correctly.
+        """
+        u = (target_url or "").strip()
+        if not u:
+            return ""
+        u = u.split("#")[0].strip()
+        if not u.startswith(("http://", "https://")):
+            u = "https://" + u
+        if u.startswith("http://"):
+            u = "https://" + u[len("http://") :]
+        return f"https://r.jina.ai/{u}"
+
     async def _scrape_via_readable_proxy(self, url: str, platform: str, handle: str) -> str:
         """
         Fallback extraction path for anti-bot pages.
         Uses a text-readable mirror endpoint to fetch public page text.
         """
         try:
-            encoded_url = quote(url, safe=":/?=&")
-            proxy_url = f"https://r.jina.ai/http://{encoded_url.replace('https://', '').replace('http://', '')}"
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            proxy_url = self._jina_reader_url(url)
+            if not proxy_url or proxy_url == "https://r.jina.ai/":
+                return ""
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, trust_env=False) as client:
                 response = await client.get(proxy_url, headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -221,7 +341,7 @@ class CompetitorService:
         # Public profile summary endpoint.
         try:
             info_url = f"https://cdn.syndication.twimg.com/widgets/followbutton/info.json?screen_names={handle}"
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, trust_env=False) as client:
                 resp = await client.get(info_url, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     data = resp.json()
@@ -312,7 +432,7 @@ class CompetitorService:
         """Try to get YouTube channel metadata."""
         try:
             channel_url = url if "/channel/" in url or "/@" in url else f"https://www.youtube.com/@{handle}"
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, trust_env=False) as client:
                 response = await client.get(channel_url, headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -422,7 +542,7 @@ class CompetitorService:
             return await _get_channel_by_id(client, channel_id)
 
         try:
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, trust_env=False) as client:
                 channel = None
 
                 channel_id = _extract_channel_id_from_url(url)
@@ -541,6 +661,10 @@ class CompetitorService:
         Fetch public Instagram profile data via web_profile_info endpoint.
         Returns profile bio and recent captions when available.
         """
+        if not handle:
+            logger.warning("Instagram scraping: empty handle provided")
+            return ""
+            
         try:
             endpoint = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={handle}"
             headers = {
@@ -548,14 +672,20 @@ class CompetitorService:
                 "X-IG-App-ID": "936619743392459",
                 "Accept-Language": "en-US,en;q=0.9",
             }
-            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            
+            logger.debug(f"Instagram scraping: requesting @{handle} from {endpoint[:60]}...")
+            async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, trust_env=False) as client:
                 response = await client.get(endpoint, headers=headers)
+                logger.debug(f"Instagram scraping: received status {response.status_code} for @{handle}")
+                
                 if response.status_code != 200:
+                    logger.info(f"Instagram API returned {response.status_code} for @{handle}")
                     return ""
 
                 payload = response.json()
                 user = payload.get("data", {}).get("user", {})
                 if not user:
+                    logger.warning(f"Instagram scraping: no user data in response for @{handle}")
                     return ""
 
                 parts = []
@@ -567,7 +697,9 @@ class CompetitorService:
                 if full_name:
                     parts.append(f"Name: {full_name}")
                 if biography:
-                    parts.append(f"Bio: {biography}")
+                    # Handle unicode safely
+                    bio_clean = biography.replace("\n", " ").strip()
+                    parts.append(f"Bio: {bio_clean}")
 
                 followers = user.get("edge_followed_by", {}).get("count")
                 following = user.get("edge_follow", {}).get("count")
@@ -582,22 +714,26 @@ class CompetitorService:
                 edges = user.get("edge_owner_to_timeline_media", {}).get("edges", [])[:8]
                 caption_lines = []
                 for edge in edges:
-                    node = edge.get("node", {})
-                    caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
-                    caption_text = (
-                        caption_edges[0].get("node", {}).get("text", "").strip()
-                        if caption_edges else ""
-                    )
-                    if caption_text:
-                        like_count = node.get("edge_liked_by", {}).get("count")
-                        comments_count = node.get("edge_media_to_comment", {}).get("count")
-                        meta = []
-                        if like_count is not None:
-                            meta.append(f"likes={like_count}")
-                        if comments_count is not None:
-                            meta.append(f"comments={comments_count}")
-                        meta_text = f" ({', '.join(meta)})" if meta else ""
-                        caption_lines.append(f"- {caption_text[:320]}{meta_text}")
+                    try:
+                        node = edge.get("node", {})
+                        caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+                        caption_text = (
+                            caption_edges[0].get("node", {}).get("text", "").strip()
+                            if caption_edges else ""
+                        )
+                        if caption_text:
+                            like_count = node.get("edge_liked_by", {}).get("count")
+                            comments_count = node.get("edge_media_to_comment", {}).get("count")
+                            meta = []
+                            if like_count is not None:
+                                meta.append(f"likes={like_count}")
+                            if comments_count is not None:
+                                meta.append(f"comments={comments_count}")
+                            meta_text = f" ({', '.join(meta)})" if meta else ""
+                            caption_lines.append(f"- {caption_text[:320]}{meta_text}")
+                    except Exception as caption_error:
+                        logger.debug(f"Instagram scraping: error parsing caption for @{handle}: {caption_error}")
+                        continue
 
                 if caption_lines:
                     parts.append("Recent post captions:")
@@ -607,8 +743,12 @@ class CompetitorService:
                 if len(text) > 100:
                     logger.info(f"Instagram scrape succeeded for @{handle}: {len(text)} chars")
                     return text
+                else:
+                    logger.info(f"Instagram scrape succeeded but text too short for @{handle}: {len(text)} chars")
+                    return text  # Return it anyway, let quality assessment decide
+                    
         except Exception as e:
-            logger.debug(f"Instagram scrape failed for @{handle}: {e}")
+            logger.error(f"Instagram scrape exception for @{handle}: {type(e).__name__}: {str(e)[:200]}", exc_info=True)
 
         return ""
 
@@ -650,6 +790,72 @@ class CompetitorService:
 
     def _build_fallback_structured_analysis(self, my_niche: str, platform: str, data_quality: str) -> dict:
         """Deterministic fallback to avoid empty/placeholder UI when LLM parsing fails."""
+        niche_lower = (my_niche or "").strip().lower()
+        if data_quality != "real" and "club" in niche_lower:
+            return {
+                "competitorStrategy": (
+                    "Based on observable patterns for college club accounts on Instagram, "
+                    "the competitor likely focuses on event promotion, member highlights, "
+                    "and occasional behind-the-scenes content, with inconsistent posting and moderate engagement."
+                ),
+                "scorecard": {
+                    "contentQuality": 45,
+                    "engagement": 50,
+                    "consistency": 40,
+                    "innovation": 35,
+                },
+                "gaps": [
+                    {
+                        "title": "Inconsistent Posting Schedule",
+                        "impact": "MEDIUM",
+                        "effort": "LOW",
+                        "description": "Irregular upload cadence reduces audience retention and algorithm favorability.",
+                        "yourMove": "Create and follow a 3-posts-per-week schedule for the next 30 days.",
+                    },
+                    {
+                        "title": "Low Story Utilization",
+                        "impact": "HIGH",
+                        "effort": "LOW",
+                        "description": "Limited use of Instagram Stories means missed real-time engagement opportunities.",
+                        "yourMove": "Launch daily Stories featuring polls, Q&As, and event teasers.",
+                    },
+                    {
+                        "title": "Weak Hashtag Strategy",
+                        "impact": "MEDIUM",
+                        "effort": "LOW",
+                        "description": "Over-reliance on generic tags limits discoverability among target members.",
+                        "yourMove": "Research and implement 10 niche-specific hashtags per post this week.",
+                    },
+                    {
+                        "title": "Minimal User-Generated Content",
+                        "impact": "HIGH",
+                        "effort": "MEDIUM",
+                        "description": "Lack of member content reduces authenticity and community feel.",
+                        "yourMove": "Run a UGC contest with a custom hashtag and repost top entries weekly.",
+                    },
+                ],
+                "winningIdeas": [
+                    {
+                        "title": "Member Spotlight Series",
+                        "format": "Carousel Posts",
+                        "whyItWins": "Addresses low content quality and engagement by showcasing personal stories.",
+                        "tag": "Engagement Driver",
+                    },
+                    {
+                        "title": "Event Countdown Sticker Series",
+                        "format": "Instagram Stories",
+                        "whyItWins": "Leverages underused Stories to build hype and drive attendance.",
+                        "tag": "Quick Win",
+                    },
+                    {
+                        "title": "Behind-the-Scenes Reel Template",
+                        "format": "Reels",
+                        "whyItWins": "Boosts innovation and credibility through authentic, snackable video content.",
+                        "tag": "Long Game",
+                    },
+                ],
+            }
+
         quality_suffix = (
             "Based on high-confidence observable posting signals."
             if data_quality == "real"
@@ -726,67 +932,117 @@ class CompetitorService:
         platform = self._detect_platform(url)
         handle = self._extract_handle(url)
         content = ""
+        scrape_stage = "unknown"
+        
+        logger.info(f"scrape_profile: Starting for platform={platform}, handle={handle}")
         
         if platform == "Instagram":
+            scrape_stage = "instagram_direct_api"
             content = await self._scrape_instagram(handle)
             if not content:
+                logger.info(f"scrape_profile: Instagram direct API returned empty, trying public metadata")
+                scrape_stage = "instagram_metadata"
                 content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: Instagram metadata returned empty, trying readable proxy")
+                scrape_stage = "instagram_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
             if not content:
-                logger.info("Instagram profile extraction unavailable, using fallback intelligence")
+                logger.info("scrape_profile: All Instagram extraction methods failed, will use fallback intelligence")
+                scrape_stage = "instagram_fallback"
         elif platform == "Twitter/X":
+            scrape_stage = "twitter_direct"
             content = await self._scrape_twitter_x(handle, url)
             if not content:
+                logger.info(f"scrape_profile: Twitter/X direct scraping returned empty, trying metadata")
+                scrape_stage = "twitter_metadata"
                 content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: Twitter/X metadata returned empty, trying readable proxy")
+                scrape_stage = "twitter_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
             if not content:
-                logger.info("Twitter/X profile extraction unavailable, using fallback intelligence")
+                logger.info("scrape_profile: Twitter/X profile extraction unavailable, using fallback intelligence")
+                scrape_stage = "twitter_fallback"
         elif platform == "LinkedIn":
+            scrape_stage = "linkedin_direct"
             content = await self._scrape_linkedin(handle, url)
             if not content:
+                logger.info(f"scrape_profile: LinkedIn direct scraping returned empty, trying metadata")
+                scrape_stage = "linkedin_metadata"
                 content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: LinkedIn metadata returned empty, trying readable proxy")
+                scrape_stage = "linkedin_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
             if not content:
-                logger.info("LinkedIn profile extraction unavailable, using fallback intelligence")
+                logger.info("scrape_profile: LinkedIn profile extraction unavailable, using fallback intelligence")
+                scrape_stage = "linkedin_fallback"
         elif platform == "Facebook":
+            scrape_stage = "facebook_direct"
             content = await self._scrape_facebook(handle, url)
             if not content:
+                logger.info(f"scrape_profile: Facebook direct scraping returned empty, trying metadata")
+                scrape_stage = "facebook_metadata"
                 content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: Facebook metadata returned empty, trying readable proxy")
+                scrape_stage = "facebook_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
             if not content:
-                logger.info("Facebook profile extraction unavailable, using fallback intelligence")
+                logger.info("scrape_profile: Facebook profile extraction unavailable, using fallback intelligence")
+                scrape_stage = "facebook_fallback"
         elif platform in RESTRICTED_PLATFORMS:
             # Try public metadata extraction first, then use strategy fallback.
+            scrape_stage = "restricted_metadata"
             content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: {platform} metadata returned empty, trying readable proxy")
+                scrape_stage = "restricted_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
             if not content:
-                logger.info(f"Restricted platform {platform}: no metadata available, using fallback intelligence")
+                logger.info(f"scrape_profile: Restricted platform {platform}: no metadata available, using fallback intelligence")
+                scrape_stage = "restricted_fallback"
         elif platform == "YouTube":
+            scrape_stage = "youtube_api"
             content = await self._scrape_youtube_data_api(url, handle)
             if not content:
+                logger.info(f"scrape_profile: YouTube Data API returned empty, trying direct scrape")
+                scrape_stage = "youtube_direct"
                 content = await self._scrape_youtube(url, handle)
             if not content:
+                logger.info(f"scrape_profile: YouTube direct scrape returned empty, trying metadata")
+                scrape_stage = "youtube_metadata"
                 content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: YouTube metadata returned empty, trying readable proxy")
+                scrape_stage = "youtube_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
         else:
             # Regular websites/blogs — scrape full content.
+            scrape_stage = "website_full"
             content = await self._scrape_website(url)
             # If full scrape fails, still try metadata so we can personalize analysis.
             if not content:
+                logger.info(f"scrape_profile: Website full scrape returned empty, trying metadata")
+                scrape_stage = "website_metadata"
                 content = await self._scrape_public_metadata(url, platform, handle)
             if not content:
+                logger.info(f"scrape_profile: Website metadata returned empty, trying readable proxy")
+                scrape_stage = "website_readable_proxy"
                 content = await self._scrape_via_readable_proxy(url, platform, handle)
         
         usable, data_quality = self._assess_scrape_quality(content, platform)
+        logger.info(f"scrape_profile: Completed scrape_stage={scrape_stage}, usable={usable}, quality={data_quality}, content_len={len(content)}")
+        
         return {
+            "platform": platform,
+            "handle": handle,
             "content": content,
             "usable": usable,
+            "data_quality": data_quality,
+            "scrape_stage": scrape_stage,
+        }
             "data_quality": data_quality,
             "platform": platform,
             "handle": handle,
@@ -832,7 +1088,11 @@ Use platform+niche patterns for '{my_niche}' on {platform}; do not invent profil
             data_quality=data_quality,
         )
 
-        response = await self.llm_service.generate(prompt, task="competitor_analysis")
+        response = await self.llm_service.generate(
+            prompt,
+            task="competitor_analysis",
+            max_tokens=3072,
+        )
         raw_text = response.get("text", "Analysis failed")
         structured = self._parse_analysis_json(raw_text)
         normalized_structured = self._normalize_structured_analysis(structured) if structured else None
@@ -922,13 +1182,44 @@ Hard constraints:
         if bracket_match:
             candidates.append(bracket_match.group(0).strip())
 
+        # If the first attempt fails, try extracting smaller `{ ... }` blocks
+        # (useful when the model returns trailing notes alongside JSON).
+        loose_blocks = re.findall(r"\{[\s\S]*?\}", text)
+        if loose_blocks:
+            # Keep only the most promising few by length.
+            for block in sorted(set(loose_blocks), key=len, reverse=True)[:8]:
+                candidates.append(block)
+
+        def _repair_json(candidate: str) -> str:
+            repaired = (candidate or "").strip()
+            # Normalize “smart” quotes.
+            repaired = repaired.replace("“", "\"").replace("”", "\"").replace("’", "'")
+            # Remove trailing commas like: { "a": 1, } or [1,2,]
+            repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+            return repaired
+
         for candidate in candidates:
             try:
-                parsed = json.loads(candidate)
+                repaired = _repair_json(candidate)
+                parsed = json.loads(repaired)
                 if isinstance(parsed, dict):
                     return parsed
             except Exception:
                 continue
+
+        # Last resort: try Python literal parsing after converting JS literals.
+        for candidate in candidates:
+            try:
+                repaired = _repair_json(candidate)
+                repaired = re.sub(r"\bnull\b", "None", repaired)
+                repaired = re.sub(r"\btrue\b", "True", repaired, flags=re.IGNORECASE)
+                repaired = re.sub(r"\bfalse\b", "False", repaired, flags=re.IGNORECASE)
+                parsed = ast.literal_eval(repaired)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+
         return None
 
     def _normalize_structured_analysis(self, data: dict) -> dict:

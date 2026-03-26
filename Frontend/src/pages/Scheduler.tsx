@@ -19,12 +19,38 @@ import {
   APIError,
 } from '@/services/api';
 import { ALLOWED_LANGUAGE_OPTIONS } from '@/constants/languages';
+import { LLMOutput } from '@/components/shared/IntelPrimitives';
 
 // ─── Supported language list ───────────────────────────────
 const LANGUAGES = [...ALLOWED_LANGUAGE_OPTIONS];
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 const PLATFORMS = ["instagram", "facebook", "twitter", "youtube", "linkedin"];
+
+function getLocalDateInputValue(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildScheduledAtIso(date: string, time: string): string | null {
+  const [yearStr, monthStr, dayStr] = date.split('-');
+  const [hourStr, minuteStr, secondStr = '00'] = time.split(':');
+
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  const second = Number(secondStr);
+
+  if ([year, month, day, hour, minute, second].some(Number.isNaN)) return null;
+
+  const localDate = new Date(year, month - 1, day, hour, minute, second);
+  if (Number.isNaN(localDate.getTime())) return null;
+  return localDate.toISOString();
+}
 
 function resolveMediaUrl(mediaUrl: string): string {
   if (!mediaUrl) return '';
@@ -132,7 +158,9 @@ function PreFlightReport({
           </summary>
           <div className="px-4 pb-3 space-y-2">
             <p className="text-xs text-muted-foreground">Adapted version:</p>
-            <p className="text-sm bg-muted/30 rounded-lg p-2 whitespace-pre-wrap">{report.culture.rewritten}</p>
+            <div className="bg-muted/30 rounded-lg p-2">
+              <LLMOutput text={report.culture.rewritten} />
+            </div>
           </div>
         </details>
       )}
@@ -144,9 +172,7 @@ function PreFlightReport({
             <span className={`text-xs font-bold ${cancelColor}`}>{s.cancel_risk}</span>
           </summary>
           <div className="px-4 pb-3 space-y-2">
-            {report.anti_cancel.recommendation && (
-              <p className="text-sm text-muted-foreground">{report.anti_cancel.recommendation}</p>
-            )}
+            {report.anti_cancel.recommendation && <LLMOutput text={report.anti_cancel.recommendation} />}
             {report.anti_cancel.local_flags.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {report.anti_cancel.local_flags.slice(0, 5).map((f, i) => (
@@ -167,7 +193,7 @@ function PreFlightReport({
             <span className={`text-xs font-bold ${shadowColor}`}>{report.shadowban.shadowban_probability}%</span>
           </summary>
           <div className="px-4 pb-3">
-            <p className="text-sm text-muted-foreground">{report.shadowban.recommendation}</p>
+            <LLMOutput text={report.shadowban.recommendation} />
           </div>
         </details>
       )}
@@ -182,7 +208,7 @@ function PreFlightReport({
             {report.assets.assets.map((a, i) => (
               <div key={i} className="rounded-lg bg-muted/30 p-2">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{a.platform}</p>
-                <p className="text-sm text-muted-foreground line-clamp-2">{a.content}</p>
+                <LLMOutput text={a.content} />
               </div>
             ))}
           </div>
@@ -286,7 +312,11 @@ export default function Scheduler() {
     if (!form.title.trim() || !form.date || !form.time) return;
     setIsSubmitting(true); setError(null);
     try {
-      const scheduledAt = new Date(`${form.date}T${form.time}`).toISOString();
+      const scheduledAt = buildScheduledAtIso(form.date, form.time);
+      if (!scheduledAt) {
+        setError('Please choose a valid date and time.');
+        return;
+      }
       let created: ScheduledPost;
 
       if (mediaFile) {
@@ -569,7 +599,20 @@ export default function Scheduler() {
                         type="date"
                         value={form.date}
                         onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                        min={new Date().toISOString().split('T')[0]}
+                        onFocus={e => {
+                          const pickerInput = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+                          if (typeof pickerInput.showPicker === 'function') {
+                            try { pickerInput.showPicker(); } catch {}
+                          }
+                        }}
+                        onClick={e => {
+                          const pickerInput = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+                          if (typeof pickerInput.showPicker === 'function') {
+                            try { pickerInput.showPicker(); } catch {}
+                          }
+                        }}
+                        min={getLocalDateInputValue()}
+                        className="cursor-pointer"
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -579,6 +622,19 @@ export default function Scheduler() {
                         type="time"
                         value={form.time}
                         onChange={e => setForm(f => ({ ...f, time: e.target.value }))}
+                        onFocus={e => {
+                          const pickerInput = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+                          if (typeof pickerInput.showPicker === 'function') {
+                            try { pickerInput.showPicker(); } catch {}
+                          }
+                        }}
+                        onClick={e => {
+                          const pickerInput = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+                          if (typeof pickerInput.showPicker === 'function') {
+                            try { pickerInput.showPicker(); } catch {}
+                          }
+                        }}
+                        className="cursor-pointer"
                       />
                     </div>
                   </div>

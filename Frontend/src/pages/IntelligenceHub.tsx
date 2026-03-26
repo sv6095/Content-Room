@@ -18,7 +18,7 @@ import {
   type MentalHealthResponse,
   type ShadowbanResponse,
 } from "@/services/api";
-import { Spinner, ResultBox, Chip, CopyBtn } from "@/components/shared/IntelPrimitives";
+import { Spinner, ResultBox, Chip, CopyBtn, LLMOutput } from "@/components/shared/IntelPrimitives";
 import { ALLOWED_LANGUAGE_OPTIONS } from "@/constants/languages";
 
 // ─── Supported Languages ──────────────────────────────────
@@ -108,7 +108,7 @@ function CultureTab() {
             <Label htmlFor="c-lang">🌐 Output Language</Label>
             <LanguageSelect id="c-lang" value={language} onChange={setLanguage} />
             <p className="text-xs text-muted-foreground">
-              Select the language for the adapted content
+              Auto picks one primary language from the region (e.g. Chennai → Tamil, Delhi → Hindi) — no Hinglish mashup.
             </p>
           </div>
           <div className="space-y-1.5">
@@ -140,11 +140,14 @@ function CultureTab() {
             <span className="text-sm font-semibold">Adapted Version</span>
             <CopyBtn text={result.rewritten} />
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{result.rewritten}</p>
+          <LLMOutput text={result.rewritten} />
           <div className="flex gap-2 flex-wrap pt-1">
             <Chip text={`Region: ${result.region}`} color="purple" />
             <Chip text={`Tone: ${result.persona_applied}`} color="blue" />
-            {language !== "Auto (Region Default)" && <Chip text={`Language: ${language}`} color="green" />}
+            <Chip
+              text={`Language: ${result.output_language ?? (language === "Auto (Region Default)" ? "Auto" : language)}`}
+              color="green"
+            />
             {result.festival && <Chip text={`Festival: ${result.festival}`} color="orange" />}
           </div>
           {result.alignment_score !== undefined && (
@@ -259,7 +262,7 @@ function RiskTab() {
             <span className="text-sm font-semibold">{result.tone_label} Mode</span>
             <CopyBtn text={result.generated} />
           </div>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-relaxed">{result.generated}</p>
+          <LLMOutput text={result.generated} />
           <div className="grid grid-cols-3 gap-3 text-center mt-2">
             {[
               { label: "Safety Score", value: result.safety_score, color: "text-emerald-400" },
@@ -374,7 +377,7 @@ function CancelTab() {
                 ? 'border-red-500/30 bg-red-500/5'
                 : 'border-primary/20 bg-primary/5'
             }`}>
-              <p className="text-sm text-muted-foreground">{result.recommendation}</p>
+              <LLMOutput text={result.recommendation} />
             </div>
           )}
         </ResultBox>
@@ -448,7 +451,7 @@ function AssetsTab() {
                     <CopyBtn text={item.content} />
                   </div>
                 </div>
-                <p className="text-sm text-muted-foreground leading-relaxed">{item.content}</p>
+                <LLMOutput text={item.content} />
                 {item.compliance_issues && item.compliance_issues.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {item.compliance_issues.map((issue, i) => (
@@ -543,7 +546,7 @@ function MentalTab() {
 
           {result.recommendations && (
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-              <p className="text-sm text-muted-foreground">{result.recommendations}</p>
+              <LLMOutput text={result.recommendations} />
             </div>
           )}
         </ResultBox>
@@ -634,14 +637,14 @@ function ShadowTab() {
 
           {result.recommendation && (
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
-              <p className="text-sm text-muted-foreground">{result.recommendation}</p>
+              <LLMOutput text={result.recommendation} />
             </div>
           )}
 
           {result.analysis && (
             <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
               <p className="text-xs font-semibold text-blue-400 uppercase tracking-wide mb-1">AI Deep Analysis</p>
-              <p className="text-sm text-muted-foreground">{result.analysis}</p>
+              <LLMOutput text={result.analysis} />
             </div>
           )}
 

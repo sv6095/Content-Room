@@ -44,6 +44,14 @@ REGIONAL_PERSONAS = {
         "avoid": ["traditional or rural references"],
         "example_opener": "Building the future, one commit at a time…",
     },
+    # Used when region is empty, "general", or Auto — not the same as tier-2 affordability persona.
+    "pan_india": {
+        "tone": "warm, trustworthy, relatable across metros and smaller towns",
+        "language_style": "Hinglish and natural English mix, accessible pan-Indian voice",
+        "hooks": ["family", "trust", "everyday value", "community", "aspiration"],
+        "avoid": ["hyper-local slang that only one city understands", "mocking any region"],
+        "example_opener": "Har ghar ki kahaani, aapke hisaab se…",
+    },
     "tier2_towns": {
         "tone": "affordability, community, utility, long-term value",
         "language_style": "Hindi, regional warmth",
@@ -59,6 +67,63 @@ REGIONAL_PERSONAS = {
         "example_opener": "Kolkata mane culture, creativity, connection…",
     },
 }
+
+
+def _normalize_region_key(region: str) -> str:
+    """
+    Map free-form region text to a REGIONAL_PERSONAS key.
+
+    Previously, anything that was not an exact key (e.g. "general", "Chennai area")
+    fell through to tier2_towns — so "Auto (Region Default)" + empty field always
+    looked like a small-town Hindi persona. We now normalize to pan_india or
+    infer city keywords from the string.
+    """
+    r = (region or "").strip().lower()
+    if not r or r in ("general", "pan-india", "pan india", "pan_india", "bharat", "india", "default"):
+        return "pan_india"
+    if r in REGIONAL_PERSONAS:
+        return r
+
+    aliases = {
+        "bengaluru": "bangalore",
+        "blr": "bangalore",
+        "ncr": "delhi",
+        "calcutta": "kolkata",
+    }
+    if r in aliases:
+        return aliases[r]
+
+    # Substring hints (order: more specific phrases first)
+    hints: list[tuple[str, str]] = [
+        ("bengaluru", "bangalore"),
+        ("bangalore", "bangalore"),
+        ("chennai", "chennai"),
+        ("tamil nadu", "chennai"),
+        ("tamil", "chennai"),
+        ("south india", "chennai"),
+        ("mumbai", "mumbai"),
+        ("maharashtra", "mumbai"),
+        ("delhi", "delhi"),
+        ("gurgaon", "delhi"),
+        ("gurugram", "delhi"),
+        ("noida", "delhi"),
+        ("north india", "delhi"),
+        ("kolkata", "kolkata"),
+        ("west bengal", "kolkata"),
+        ("east india", "kolkata"),
+        ("hyderabad", "tier2_towns"),
+        ("telangana", "tier2_towns"),
+        ("tier 2", "tier2_towns"),
+        ("tier2", "tier2_towns"),
+        ("tier-2", "tier2_towns"),
+        ("tier 3", "tier2_towns"),
+    ]
+    for needle, key in hints:
+        if needle in r:
+            return key
+
+    return "pan_india"
+
 
 FESTIVAL_TONES = {
     "diwali": "celebration, light over darkness, prosperity, family reunion",
@@ -103,6 +168,30 @@ LANGUAGE_CODE_TO_SCRIPT = {
     "ml": "Malayalam script",
     "gu": "Gujarati script",
     "or": "Odia script",
+}
+
+# ISO 639-1 code → display name (for prompts and API)
+LANGUAGE_CODE_TO_DISPLAY_NAME = {
+    "en": "English",
+    "hi": "Hindi",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "bn": "Bengali",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "gu": "Gujarati",
+    "or": "Odia",
+}
+
+# When target_language is omitted (Auto / region default), pick ONE primary language per region — no Hinglish mashup.
+REGION_KEY_TO_DEFAULT_LANGUAGE: dict[str, tuple[str, str]] = {
+    "chennai": ("Tamil", "ta"),
+    "mumbai": ("Hindi", "hi"),
+    "delhi": ("Hindi", "hi"),
+    "bangalore": ("Kannada", "kn"),
+    "kolkata": ("Bengali", "bn"),
+    "tier2_towns": ("Hindi", "hi"),
+    "pan_india": ("English", "en"),
 }
 
 
@@ -153,6 +242,10 @@ def _resolve_language_code(target_language: Optional[str]) -> Optional[str]:
     if raw in LANGUAGE_NAME_TO_CODE.values():
         return raw
     return None
+
+
+def _display_name_for_language_code(code: str) -> str:
+    return LANGUAGE_CODE_TO_DISPLAY_NAME.get(code, code.upper() if code else "English")
 
 
 def _requires_post_translation(text: str, target_code: Optional[str]) -> bool:
@@ -259,37 +352,48 @@ async def rewrite_for_region(
     - Rule Engine (40% weight): Validates the output against regional persona rules
     - Final alignment_score = LLM confidence blended with rule compliance
     """
-    persona = REGIONAL_PERSONAS.get(region.lower(), REGIONAL_PERSONAS["tier2_towns"])
+    region_key = _normalize_region_key(region)
+    persona = REGIONAL_PERSONAS.get(region_key, REGIONAL_PERSONAS["pan_india"])
+    region_label = (region or "").strip() or "Pan-India"
     festival_context = ""
     if festival and festival.lower() in FESTIVAL_TONES:
         festival_context = f"\nFestival Context: This is for {festival.title()}. The emotional theme is: {FESTIVAL_TONES[festival.lower()]}"
 
-    # Determine language instruction
-    target_lang_code = _resolve_language_code(target_language)
+    # Language: explicit user choice wins; otherwise map region → one primary language (no Hinglish default).
+    explicit_lang_code = _resolve_language_code(target_language)
+    auto_lang_name, auto_lang_code = REGION_KEY_TO_DEFAULT_LANGUAGE.get(
+        region_key, ("English", "en")
+    )
+    if explicit_lang_code is not None:
+        target_lang_code = explicit_lang_code
+        lang_display_name = (target_language or "").strip() or _display_name_for_language_code(explicit_lang_code)
+    else:
+        target_lang_code = auto_lang_code
+        lang_display_name = auto_lang_name
+
     if target_lang_code and target_lang_code != "en":
-        script_name = LANGUAGE_CODE_TO_SCRIPT.get(target_lang_code, "native script")
+        script_name = LANGUAGE_CODE_TO_SCRIPT.get(target_lang_code, "the correct native script")
         lang_instruction = (
-            f"Write the output in {target_language} using {script_name} only. "
-            f"Do NOT use Romanized transliteration (for example: 'enna', 'irukku', 'epdi'). "
-            f"Do NOT mix English except unavoidable brand names."
-        )
-    elif target_lang_code == "en":
-        lang_instruction = (
-            "Write the output in natural English only. "
-            "Do NOT include transliterated words or non-English scripts."
+            f"Write the entire output in {lang_display_name} using {script_name} only. "
+            f"Do NOT use Romanized transliteration for Indian languages. "
+            f"Do NOT mix English except unavoidable brand names or proper nouns. "
+            f"Do NOT use Hinglish, Tanglish, or other Hindi–English / Tamil–English code-mixing."
         )
     else:
-        lang_instruction = f"Use the natural language style of the region: {persona['language_style']}."
+        lang_instruction = (
+            "Write the output in natural English only. "
+            "Do not use Hindi, Tamil, or other scripts. No Hinglish or code-mixing."
+        )
 
+    # Persona drives tone only; output language is fixed above.
     persona_style_instruction = (
-        "English-first with regional cultural nuance (references, emotion, context) but no code-mixing."
-        if target_lang_code == "en"
-        else persona["language_style"]
+        f"Regional emotional tone: {persona['tone']}. "
+        f"Express this tone entirely in {lang_display_name} — not by blending languages."
     )
 
     prompt = f"""Role: Bharat content strategist for regional adaptation.
 
-Target region: {region.title()}
+Target region: {region_label}
 {lang_instruction}
 
 Persona:
@@ -307,8 +411,7 @@ Rules:
 - Keep core message unchanged; adapt emotional framing only.
 - Start with a region-relevant hook.
 - Include at least 2 listed hooks naturally.
-- If target language is specified, write ONLY in that language (except unavoidable brand names/proper nouns).
-- If English is requested, output must be fully English with no transliteration.
+- Output language is {lang_display_name} only (see instruction above). No Hinglish or multi-language mashups.
 - Keep it concise and natural: 3-5 sentences, avoid repetition.
 - No hashtags, no explanation.
 - Return only rewritten content.
@@ -327,7 +430,7 @@ Rules:
     elif _looks_low_quality_adaptation(rewritten_text):
         repair_prompt = f"""Rewrite the content again with clean, fluent copy.
 
-Target region: {region.title()}
+Target region: {region_label}
 Target language instruction: {lang_instruction}
 {"Festival: " + festival.title() if festival else ""}
 {"Niche: " + content_niche if content_niche else ""}
@@ -389,6 +492,8 @@ Hard requirements:
         "region":                region,
         "persona_applied":       persona["tone"],
         "festival":              festival,
+        "output_language":       lang_display_name,
+        "output_language_code":  target_lang_code,
         # Scores
         "alignment_score":       final_alignment_score,
         "llm_score":             llm_baseline,
@@ -408,12 +513,13 @@ Hard requirements:
 
 async def get_available_regions() -> list:
     return [
-        {"id": "chennai", "name": "Chennai / South India", "emoji": "🌴"},
-        {"id": "mumbai", "name": "Mumbai / Maharashtra", "emoji": "🏙️"},
-        {"id": "delhi", "name": "Delhi / North India", "emoji": "🏛️"},
-        {"id": "bangalore", "name": "Bangalore / Tech Belt", "emoji": "💻"},
-        {"id": "tier2_towns", "name": "Tier 2 & 3 Towns", "emoji": "🌾"},
-        {"id": "kolkata", "name": "Kolkata / East India", "emoji": "🎭"},
+        {"id": "pan_india", "name": "Pan-India (English default)", "emoji": "🇮🇳"},
+        {"id": "chennai", "name": "Chennai / South India → Tamil", "emoji": "🌴"},
+        {"id": "mumbai", "name": "Mumbai / Maharashtra → Hindi", "emoji": "🏙️"},
+        {"id": "delhi", "name": "Delhi / North India → Hindi", "emoji": "🏛️"},
+        {"id": "bangalore", "name": "Bangalore / Karnataka → Kannada", "emoji": "💻"},
+        {"id": "tier2_towns", "name": "Tier 2 & 3 → Hindi", "emoji": "🌾"},
+        {"id": "kolkata", "name": "Kolkata / East → Bengali", "emoji": "🎭"},
     ]
 
 

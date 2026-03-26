@@ -8,6 +8,36 @@ import { LanguageProvider } from "@/contexts/LanguageContext";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 
+/**
+ * Validate that critical environment variables are set correctly.
+ * This helps catch configuration issues before they cause runtime failures.
+ */
+function validateEnvironment() {
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').trim();
+  
+  if (!apiBaseUrl) {
+    console.error(
+      '[ENV] VITE_API_BASE_URL is not configured. ' +
+      'Media loading and API calls will fail. ' +
+      'Set VITE_API_BASE_URL in Frontend/.env file.'
+    );
+    return;
+  }
+  
+  // Test if API is reachable (non-fatal if it fails in offline mode)
+  fetch(`${apiBaseUrl}/health`, { method: 'HEAD' })
+    .then(response => {
+      if (!response.ok) {
+        console.warn(`[ENV] API health check failed: ${response.status}. Backend may be offline.`);
+      } else {
+        console.debug('[ENV] API is reachable and responding');
+      }
+    })
+    .catch(error => {
+      console.warn('[ENV] Could not reach API endpoint. Backend may be offline or CORS not configured.', error);
+    });
+}
+
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -30,6 +60,9 @@ const App = () => {
     // Default to dark mode if no preference is saved
     const isDark = localStorage.getItem('darkMode') !== 'false';
     document.documentElement.classList.toggle('dark', isDark);
+    
+    // Validate critical environment variables at app startup
+    validateEnvironment();
   }, []);
 
   return (
